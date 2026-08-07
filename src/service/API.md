@@ -37,6 +37,7 @@
 | HTTP 메서드 | **조회 포함 거의 전부 `POST`.** `GET`은 `/api/health`, `/api/auth/me` 두 개뿐 |
 | 식별자 전달 | 쿼리스트링 미사용. **모든 ID는 Request Body로** |
 | 시간 형식 | **Unix Timestamp (초 단위, BigInt)**. 밀리초 아님 |
+| 메타데이터 저장소 | RDBMS(MySQL) 중심. **파일 자체는 Cloudflare R2**, DB에는 경로만 저장 |
 | 문자 인코딩 | UTF-8 |
 
 > ⚠️ **`GET`이 아니라 `POST`입니다.** 목록 조회·상세 조회도 전부 POST + Body입니다.
@@ -457,14 +458,16 @@ Cloudflare R2 업로드를 담당합니다.
 
 ---
 
-#### `POST /api/files/list` · `get` · `delete` · `getPresigned`
+#### `POST /api/files/list` · `/api/files/get` · `/api/files/delete` · `/api/files/getPresigned`
+
+**인증** User
 
 | 엔드포인트 | Request | 응답 `data` |
 |---|---|---|
-| `/list` | 없음 | `{ "files": [FileMetadata], "total": 3 }` |
-| `/get` | `{ "fileId": "..." }` | `FileMetadata` |
-| `/delete` | `{ "fileId": "..." }` | `{ "fileId": "..." }` |
-| `/getPresigned` | `{ "fileId": "..." }` | `{ "url": "https://...?X-Amz-..." }` (900초 유효) |
+| `POST /api/files/list` | 없음 | `{ "files": [FileMetadata], "total": 3 }` |
+| `POST /api/files/get` | `{ "fileId": "..." }` | `FileMetadata` |
+| `POST /api/files/delete` | `{ "fileId": "..." }` | `{ "fileId": "..." }` |
+| `POST /api/files/getPresigned` | `{ "fileId": "..." }` | `{ "url": "https://...?X-Amz-..." }` (900초 유효) |
 
 **에러** — 404 `file not found`
 
@@ -719,10 +722,10 @@ Cloudflare R2 업로드를 담당합니다.
 | `thumbUrl` | string | — | `null` |
 | `pStat` | int | — | `1` |
 
-#### `POST /api/prod/update` · `delete` — **Admin**
+#### `POST /api/prod/update` · `POST /api/prod/delete` — **Admin**
 
-`update`: `id` 필수 + 변경 필드만 → `ProdItem`
-`delete`: `{ "id": 7 }` → `{ "id": 7 }`
+`POST /api/prod/update`: `id` 필수 + 변경 필드만 → `ProdItem`
+`POST /api/prod/delete`: `{ "id": 7 }` → `{ "id": 7 }`
 
 **에러** — 400 `Invalid pStat value`, 400 `No fields to update`, 404 `Product not found`
 
