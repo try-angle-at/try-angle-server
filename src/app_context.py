@@ -27,7 +27,6 @@ from typing import Any, Dict, Optional
 from pydantic import BaseModel, Field, ValidationError
 
 from src.modules import logger
-from src.modules.system_monitor import SystemMonitor
 from src.handler.db_handler import DBHandler
 
 
@@ -162,7 +161,6 @@ class AppContext:
         cfg: Loaded application configuration (AppConfig instance)
         log: Configured logger instance
         db_handler: Database connection handler
-        system_monitor: System monitoring service
     """
 
     def __init__(self) -> None:
@@ -170,7 +168,6 @@ class AppContext:
         self.cfg: Optional[AppConfig] = None
         self.log: Optional[logging.Logger] = None
         self.db_handler: Optional[DBHandler] = None
-        self.system_monitor: Optional[SystemMonitor] = None
 
     def load_config(self, config_path: str) -> AppConfig:
         """Load and parse application configuration from JSON file.
@@ -354,7 +351,8 @@ class AppContext:
             
         try:
             self.log.debug("Initializing database handler")
-            self.db_handler = DBHandler(self)
+            # DBHandler는 pymysql.connect(**config)로 풀어 쓰므로 dict를 넘긴다
+            self.db_handler = DBHandler(self.cfg.db.model_dump())
             self.log.debug("Database handler initialized successfully")
             
         except Exception as e:

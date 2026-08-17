@@ -132,11 +132,8 @@ class AppFactory:
     @staticmethod
     async def _initialize_managers(ctx: AppContext) -> None:
         """매니저 초기화"""
-        print("     - Initializing managers...")   
+        print("     - Initializing managers...")
         ctx._init_logger()
-        AppFactory._test_logging(ctx.log)
-        
-        ctx._init_system_manager()
 
     @staticmethod
     async def _initialize_handlers(ctx: AppContext) -> None:
