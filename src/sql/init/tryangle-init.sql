@@ -156,7 +156,7 @@ CREATE TABLE IF NOT EXISTS tb_snap (
 	userId BIGINT NOT NULL COMMENT 'Snapshot creator (FK to tb_user)',
 	prodId BIGINT NOT NULL COMMENT 'Product being worn (FK to tb_prod)',
 	imgId BIGINT NOT NULL COMMENT 'Reference image used (FK to tb_img)',
-	sId BIGINT NULL COMMENT 'Associated session (FK to tb_session, nullable, SET NULL on delete)',
+	sId VARCHAR(32) NULL COMMENT 'Associated session (FK to tb_session.id VARCHAR(32), nullable, SET NULL on delete)',
 	
 	-- Storage & Access
 	snapUrl VARCHAR(500) NOT NULL COMMENT 'S3/R2 snapshot file (snaps/YYYY/MM/snap_sId_timestamp.webp)',
@@ -229,9 +229,10 @@ CREATE TABLE IF NOT EXISTS mtb_img_tag (
 	KEY idx_mtb_img_tag_imgId (imgId) COMMENT 'Query all tags applied to an image',
 	KEY idx_mtb_img_tag_tagId (tagId) COMMENT 'Query all images with a tag',
 	CONSTRAINT fk_mtb_img_tag_imgId FOREIGN KEY (imgId) REFERENCES tb_img (id)
-		ON DELETE CASCADE ON UPDATE CASCADE, -- Remove tag mappings when image deleted
-	CONSTRAINT fk_mtb_img_tag_tagId FOREIGN KEY (tagId) REFERENCES tb_tag (id)
-		ON DELETE CASCADE ON UPDATE CASCADE -- Remove tag mappings when tag deleted
+		ON DELETE CASCADE ON UPDATE CASCADE -- Remove tag mappings when image deleted
+	-- NOTE: tb_tag 테이블이 아직 정의되지 않아 아래 FK는 보류 (tb_tag 추가 시 복원)
+	-- , CONSTRAINT fk_mtb_img_tag_tagId FOREIGN KEY (tagId) REFERENCES tb_tag (id)
+	--     ON DELETE CASCADE ON UPDATE CASCADE -- Remove tag mappings when tag deleted
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
 	COMMENT 'Image-to-tag mappings (reserved for future implementation)';
 
