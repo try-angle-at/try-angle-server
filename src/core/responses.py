@@ -43,7 +43,7 @@ class ResponseStatus(Enum):
         return next((s for s in cls if s.http_code == http_code), cls.SERVER_ERROR)
 
 
-def build_response_body(status: jsonable_encoder, data=None):
+def build_response_body(status: ResponseStatus, data=None):
     return {
         "tid": int(time.time() * 1000),
         "status": status.info, # 여기서 http_status, code, msg가 한 번에 나감
@@ -52,9 +52,9 @@ def build_response_body(status: jsonable_encoder, data=None):
 
 def build_success_response(data):
     """성공 응답 전용 헬퍼"""
-    return build_response_body(jsonable_encoder.SUCCESS, data)
+    return build_response_body(ResponseStatus.SUCCESS, data)
 
 def build_error_response(http_code: int, data=None):
     """에러 응답 전용 헬퍼"""
-    status_obj = http_status.from_http_code(http_code)
+    status_obj = ResponseStatus.from_http_code(http_code)
     return build_response_body(status_obj, data)
