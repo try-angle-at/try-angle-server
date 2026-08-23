@@ -52,6 +52,14 @@ class UserUpdate(BaseModel):
     extra: Optional[Dict[str, Any]] = None
 
 
+class KakaoLogin(BaseModel):
+    """
+    카카오 로그인 요청 스키마
+    - accessToken: 카카오 SDK 로그인으로 클라이언트(iOS)가 발급받은 카카오 액세스 토큰
+    """
+    accessToken: str = Field(..., description="카카오 액세스 토큰")
+
+
 class UserLogin(BaseModel):
     """
     이메일 로그인 요청 스키마

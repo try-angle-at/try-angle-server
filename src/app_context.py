@@ -117,6 +117,16 @@ class StorageConfig(BaseModel):
     upload_url_expire_seconds: int = 900
 
 
+class KakaoConfig(BaseModel):
+    """카카오 로그인 설정.
+
+    Attributes:
+        app_id: 카카오 개발자 콘솔의 앱 ID(숫자). 설정하면 클라이언트가 보낸
+            액세스 토큰이 우리 앱에서 발급된 것인지 대조한다. None이면 대조 생략(개발용).
+    """
+    app_id: Optional[int] = None
+
+
 class AppConfig(BaseModel):
     """Main application configuration model.
     
@@ -152,6 +162,7 @@ class AppConfig(BaseModel):
     storage: Optional[StorageConfig] = Field(
         default=None, validation_alias=AliasChoices("storage", "r2")
     )
+    kakao: Optional[KakaoConfig] = None
     db: Optional[DBConfig] = None
 
     enable_monitoring: bool = True

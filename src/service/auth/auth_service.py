@@ -85,6 +85,55 @@ def get_user_by_email(ctx: AppContext, email: str, activeOnly: bool = True) -> O
         "providerId": extra.get("providerId")
     }
 
+def _row_to_user(row) -> dict:
+    """tb_user SELECT(12컬럼) 결과 한 행을 사용자 dict로 변환 (get_user_by_email과 동일 매핑)"""
+    extra = row[11] or {}
+    if isinstance(extra, str):
+        extra = _json.loads(extra)
+    return {
+        "id": row[0],
+        "email": row[1],
+        "password": row[2],
+        "name": row[3],
+        "nickname": row[4],
+        "phone": row[5],
+        "emailConf": row[6],
+        "desc": row[7],
+        "filePath": row[8],
+        "role": row[9],
+        "state": row[10],
+        "extra": extra,
+        "provider": extra.get("provider", "email"),
+        "providerId": extra.get("providerId"),
+    }
+
+
+def get_user_by_provider(ctx: AppContext, provider: str, providerId: str, activeOnly: bool = True) -> Optional[dict]:
+    """
+    소셜 로그인 제공자 식별자로 사용자 조회
+    - provider/providerId는 extra JSON 컬럼에 저장돼 있어 JSON_EXTRACT로 찾는다
+    """
+    sql = """
+        SELECT id, email, password, name, nickname, phone,
+               emailConf, `desc`, fileId, role, state, extra
+        FROM tb_user
+        WHERE JSON_UNQUOTE(JSON_EXTRACT(extra, '$.provider')) = %s
+          AND JSON_UNQUOTE(JSON_EXTRACT(extra, '$.providerId')) = %s
+    """
+    params = [provider, providerId]
+    if activeOnly:
+        sql += " AND state = %s"
+        params.append(UserState.ACTIVE.value)
+
+    if not ctx.db_handler:
+        return None
+
+    rows = execute_query(ctx.db_handler, sql, tuple(params))
+    if not rows:
+        return None
+    return _row_to_user(rows[0])
+
+
 def check_user_exists(ctx: AppContext, userId: int) -> bool:
     sql = "SELECT COUNT(*) FROM tb_user WHERE id = %s"
     rows = execute_query(ctx.db_handler, sql, (userId,))
