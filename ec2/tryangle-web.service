@@ -4,10 +4,11 @@ After=network.target
 
 # 배포 전제 (Amazon Linux 2023 / ec2-user)
 #   - 코드: /opt/try-angle-server  (venv: /opt/try-angle-server/.venv)
-#   - 설정: src/service/conf/tryangle_web_server.local.cfg.json 에 DB/secret_key 기입
-#   - 환경파일: /etc/tryangle/tryangle.env (chmod 600)
-#       AWS_ACCESS_KEY_ID=<R2 Access Key ID>          # R2는 S3 호환 API라 boto3 표준 변수명을 그대로 사용
-#       AWS_SECRET_ACCESS_KEY=<R2 Secret Access Key>
+#   - 설정: src/service/conf/tryangle_web_server.local.cfg.json 에 DB/secret_key/storage 기입
+#   - 스토리지: AWS S3 + EC2 인스턴스 프로파일(IAM Role) — 액세스 키 불필요.
+#     (Cloudflare R2 등 S3 호환 스토리지로 되돌릴 때만 /etc/tryangle/tryangle.env 에
+#      AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY 를 넣는다. S3 사용 중에는 이 두 변수를
+#      반드시 비워 둘 것 — 환경변수가 IAM Role보다 우선하므로 남아 있으면 S3 인증이 깨진다.)
 #   - 설치: sudo cp ec2/tryangle-web.service /etc/systemd/system/ && sudo systemctl daemon-reload
 #           && sudo systemctl enable --now tryangle-web
 
@@ -15,7 +16,7 @@ After=network.target
 Type=simple
 User=ec2-user
 WorkingDirectory=/opt/try-angle-server
-EnvironmentFile=/etc/tryangle/tryangle.env
+EnvironmentFile=-/etc/tryangle/tryangle.env
 ExecStart=/opt/try-angle-server/.venv/bin/uvicorn src.tryangle_web_server:app --host 0.0.0.0 --port 8080
 Restart=always
 RestartSec=5

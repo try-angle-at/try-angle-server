@@ -22,16 +22,21 @@ _STORE: Dict[str, FileMetadata] = {}
 _STORE_LOCK = threading.Lock()
 
 
-def _r2_client(ctx):
-    r2 = ctx.cfg.r2
+def _storage_client(ctx):
+    """오브젝트 스토리지 클라이언트.
+
+    - storage.endpoint_url이 비어 있으면 AWS S3: 자격증명은 boto3 기본 체인
+      (EC2 인스턴스 프로파일 IAM Role — 키를 설정에 두지 않는다)
+    - 설정되어 있으면 Cloudflare R2 등 S3 호환 스토리지: 액세스 키 필요
+    """
+    st = ctx.cfg.storage
     session = aioboto3.Session()
-    return session.client(
-        "s3",
-        endpoint_url=r2.endpoint_url,
-        aws_access_key_id=r2.access_key_id,
-        aws_secret_access_key=r2.secret_access_key,
-        region_name=r2.region,
-    )
+    kwargs = {"region_name": st.region}
+    if st.endpoint_url:
+        kwargs["endpoint_url"] = st.endpoint_url
+        kwargs["aws_access_key_id"] = st.access_key_id
+        kwargs["aws_secret_access_key"] = st.secret_access_key
+    return session.client("s3", **kwargs)
 
 
 async def save_file(
@@ -56,8 +61,8 @@ async def save_file(
             detail=f"Image too large ({len(data)} bytes). Max allowed: {IMAGE_MAX_BYTES} bytes (10 MB)",
         )
 
-    # --- R2 업로드 ---
-    r2_cfg = ctx.cfg.r2
+    # --- 스토리지 업로드 ---
+    st_cfg = ctx.cfg.storage
     if not upload_type:
         raise HTTPException(status_code=400, detail="'type' is required")
 
@@ -91,15 +96,15 @@ async def save_file(
 
     key = f"{folder}/{upload_cfg['prefix']}{id_part}_{now}{ext}"
 
-    async with _r2_client(ctx) as client:
+    async with _storage_client(ctx) as client:
         await client.put_object(
-            Bucket=r2_cfg.bucket_name,
+            Bucket=st_cfg.bucket_name,
             Key=key,
             Body=data,
             ContentType=content_type,
         )
 
-    base_url = (r2_cfg.public_base_url or "").rstrip("/")
+    base_url = (st_cfg.public_base_url or "").rstrip("/")
     public_url = f"{base_url}/{key}"
 
     metadata = FileMetadata(
@@ -117,7 +122,7 @@ async def save_file(
     with _STORE_LOCK:
         _STORE[file_id] = metadata
 
-    ctx.log.info(f"Uploaded to R2 | id={file_id} key={key} size={len(data)}")
+    ctx.log.info(f"Uploaded to storage | id={file_id} key={key} size={len(data)}")
     return metadata
 
 
@@ -129,15 +134,15 @@ async def delete_file(ctx, file_id: str) -> Optional[FileMetadata]:
         return None
 
     try:
-        async with _r2_client(ctx) as client:
+        async with _storage_client(ctx) as client:
             await client.delete_object(
-                Bucket=ctx.cfg.r2.bucket_name,
+                Bucket=ctx.cfg.storage.bucket_name,
                 Key=info.fileKey,
             )
     except Exception as e:
-        ctx.log.warning(f"Failed to delete from R2 | id={file_id} | err={e}")
+        ctx.log.warning(f"Failed to delete from storage | id={file_id} | err={e}")
 
-    ctx.log.info(f"Deleted from R2 | id={file_id}")
+    ctx.log.info(f"Deleted from storage | id={file_id}")
     return info
 
 
@@ -157,11 +162,11 @@ async def get_presigned_url(ctx, file_id: str) -> Optional[str]:
     if not info:
         return None
 
-    r2_cfg = ctx.cfg.r2
-    async with _r2_client(ctx) as client:
+    st_cfg = ctx.cfg.storage
+    async with _storage_client(ctx) as client:
         url = await client.generate_presigned_url(
             "get_object",
-            Params={"Bucket": r2_cfg.bucket_name, "Key": info.fileKey},
-            ExpiresIn=r2_cfg.upload_url_expire_seconds,
+            Params={"Bucket": st_cfg.bucket_name, "Key": info.fileKey},
+            ExpiresIn=st_cfg.upload_url_expire_seconds,
         )
     return url
