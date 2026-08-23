@@ -14,9 +14,17 @@ class DBHandler:
             self._local.conn = pymysql.connect(**self._config)
 
     def get_connection(self):
-        """현재 스레드의 커넥션 반환 (없으면 init)"""
+        """현재 스레드의 커넥션 반환 (없으면 init, 죽었으면 재접속)"""
         if not hasattr(self._local, "conn"):
             self.init_connection()
+        else:
+            try:
+                # MySQL wait_timeout(기본 8시간) 등으로 서버가 끊은 커넥션이면 재접속.
+                # 이게 없으면 유휴 후 첫 DB 요청부터 전부 500이 난다.
+                self._local.conn.ping(reconnect=True)
+            except Exception:
+                self.close_connection()
+                self.init_connection()
         return self._local.conn
 
     def close_connection(self):
