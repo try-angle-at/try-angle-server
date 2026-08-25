@@ -48,6 +48,27 @@ async def login(request: Request, loginReq: UserLogin):
     return build_success_response({"accessToken": accessToken, "tokenType": "bearer"})
 
 
+@router.post("/token")
+async def login_for_access_token(request: Request, form_data: OAuth2PasswordRequestForm = Depends()):
+    """
+    OAuth2 폼 로그인 — Swagger UI의 Authorize 버튼과 폼 기반 클라이언트용 (username 칸에 이메일)
+    응답 키는 OAuth2 표준(access_token/token_type) 형식이어야 Swagger가 토큰을 인식한다.
+    """
+    ctx = request.app.state.ctx
+    user = auth_service.authenticate_user(ctx, form_data.username, form_data.password)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    accessToken = auth_service.create_access_token(
+        ctx,
+        data={"sub": user["email"], "role": user["role"]}
+    )
+    return {"access_token": accessToken, "token_type": "bearer"}
+
+
 @router.post("/kakao")
 async def kakao_login(request: Request, body: KakaoLogin):
     """
