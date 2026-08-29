@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS tb_user (
 	
 	PRIMARY KEY (id),
 	UNIQUE KEY uk_tb_user_email (email) COMMENT 'Email must be unique for login',
+	UNIQUE KEY uk_tb_user_nickname (nickname) COMMENT 'Nickname must be unique (2026-08-25 policy)',
 	KEY idx_tb_user_state (state) COMMENT 'Index for filtering active/inactive users',
 	CONSTRAINT ck_tb_user_state CHECK (state IN (0, 1)) -- Enforce binary state values
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci

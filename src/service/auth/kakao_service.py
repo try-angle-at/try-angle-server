@@ -6,6 +6,7 @@
 #   → provider="kakao" + providerId(카카오 회원번호)로 기존 회원 조회, 없으면 자동 가입
 #   → 이후는 이메일 로그인과 동일하게 자체 JWT 발급 (auth_api에서 처리)
 
+import uuid
 from typing import Tuple
 
 import httpx
@@ -41,6 +42,26 @@ async def _kakao_get(path: str, access_token: str) -> dict:
     return resp.json()
 
 
+def _resolve_nickname(ctx, raw: str, provider_id: str) -> str:
+    """카카오 닉네임을 서비스 규칙(2~10자, 중복 불가)에 맞춘다.
+
+    - 10자 초과면 자르고, 2자 미만/없음이면 "카카오XXXX" 폴백
+    - 이미 쓰는 닉네임이면 뒤에 숫자를 붙여 비는 값을 찾는다 (카카오 가입이
+      닉네임 중복 때문에 실패하지 않도록)
+    """
+    base = (raw or "").strip()[:10]
+    if len(base) < 2:
+        base = f"카카오{provider_id[-4:]}"[:10]
+    if not auth_service.check_nickname_exists(ctx, base):
+        return base
+    for i in range(2, 100):
+        suffix = str(i)
+        candidate = f"{base[:10 - len(suffix)]}{suffix}"
+        if not auth_service.check_nickname_exists(ctx, candidate):
+            return candidate
+    return uuid.uuid4().hex[:10]  # 사실상 도달 불가한 최후 폴백
+
+
 async def authenticate_kakao_user(ctx: AppContext, access_token: str) -> Tuple[dict, bool]:
     """카카오 액세스 토큰을 검증하고 (회원 dict, 신규 가입 여부)를 반환한다."""
     # 1) 토큰 검증 + 발급 앱 대조 (설정에 kakao.app_id가 있을 때만 대조)
@@ -64,11 +85,12 @@ async def authenticate_kakao_user(ctx: AppContext, access_token: str) -> Tuple[d
     # 4) 신규 자동 가입
     account = me.get("kakao_account") or {}
     profile = account.get("profile") or {}
-    nickname = (
+    raw_nickname = (
         profile.get("nickname")
         or (me.get("properties") or {}).get("nickname")
-        or f"카카오{provider_id[-4:]}"
+        or ""
     )
+    nickname = _resolve_nickname(ctx, raw_nickname, provider_id)
 
     # 이메일은 (동의로 받았고 + 검증됐고 + 미사용일 때)만 실제 값을 쓴다.
     # 같은 이메일의 기존 계정에 자동으로 붙이지 않는 이유: 카카오 토큰만으로

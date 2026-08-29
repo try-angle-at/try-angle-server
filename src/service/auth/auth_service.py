@@ -3,6 +3,7 @@ import json as _json
 import time as _time
 from typing import Optional
 import jwt  # Using PyJWT or python-jose
+import pymysql
 from fastapi import HTTPException
 from passlib.context import CryptContext
 
@@ -150,6 +151,27 @@ def check_email_exists(ctx: AppContext, email: str) -> bool:
     return False
 
 
+def check_nickname_exists(ctx: AppContext, nickname: str, excludeUserId: Optional[int] = None) -> bool:
+    """닉네임 사용 여부 (수정 시에는 본인 제외). 컬럼 콜레이션이 대소문자 무시라 Kim/kim도 중복."""
+    sql = "SELECT COUNT(*) FROM tb_user WHERE nickname = %s"
+    params = [nickname]
+    if excludeUserId is not None:
+        sql += " AND id != %s"
+        params.append(excludeUserId)
+    rows = execute_query(ctx.db_handler, sql, tuple(params))
+    return bool(rows and rows[0][0] > 0)
+
+
+def _duplicate_to_http_400(e: pymysql.err.IntegrityError) -> HTTPException:
+    """UNIQUE 제약 위반(동시 가입 경쟁 등)을 사용자 친화적 400으로 변환"""
+    msg = str(e)
+    if "uk_tb_user_nickname" in msg:
+        return HTTPException(status_code=400, detail="Nickname already in use")
+    if "uk_tb_user_email" in msg:
+        return HTTPException(status_code=400, detail="Email already registered")
+    return HTTPException(status_code=400, detail="Duplicate value")
+
+
 def authenticate_user(ctx: AppContext, email: str, password: str) -> Optional[dict]:
     user = get_user_by_email(ctx, email, activeOnly=True)
     if not user:
@@ -162,6 +184,8 @@ def authenticate_user(ctx: AppContext, email: str, password: str) -> Optional[di
 def create_user(ctx: AppContext, userDto: UserCreate) -> dict:
     if check_email_exists(ctx, userDto.email):
         raise HTTPException(status_code=400, detail="Email already registered")
+    if userDto.nickname and check_nickname_exists(ctx, userDto.nickname):
+        raise HTTPException(status_code=400, detail="Nickname already in use")
 
     hashedPassword = get_password_hash(userDto.password) if userDto.password else None
     
@@ -199,6 +223,9 @@ def create_user(ctx: AppContext, userDto: UserCreate) -> dict:
             cursor.execute(sql, params)
             newId = cursor.lastrowid
             conn.commit()
+    except pymysql.err.IntegrityError as e:
+        conn.rollback()
+        raise _duplicate_to_http_400(e)
     except Exception as e:
         conn.rollback()
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
@@ -232,6 +259,9 @@ def update_user(ctx: AppContext, userId: int, data: dict) -> bool:
         if data.get("password") and not verify_password(data["password"], rows[0][2]):
             raise HTTPException(status_code=400, detail="Current password incorrect")
         data["password"] = get_password_hash(data["passwordNew"])
+
+    if data.get("nickname") and check_nickname_exists(ctx, data["nickname"], excludeUserId=userId):
+        raise HTTPException(status_code=400, detail="Nickname already in use")
 
     fields = []
     params = []
@@ -267,6 +297,9 @@ def update_user(ctx: AppContext, userId: int, data: dict) -> bool:
             cursor.execute(sql, params)
             conn.commit()
         return True
+    except pymysql.err.IntegrityError as e:
+        conn.rollback()
+        raise _duplicate_to_http_400(e)
     except Exception as e:
         conn.rollback()
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")

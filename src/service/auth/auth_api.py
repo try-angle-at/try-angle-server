@@ -14,14 +14,20 @@ async def signup(request: Request, user: UserCreate):
     회원가입 API
     """
     ctx = request.app.state.ctx
-    
-    # 비밀번호 확인 체크
-    if user.password and user.passwordCheck:
-        if user.password != user.passwordCheck:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Password match failed"
-            )
+
+    # 이메일 가입은 비밀번호 필수 (소셜 가입은 password 없음)
+    if user.provider == "email" and not user.password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password is required"
+        )
+
+    # 비밀번호 확인 체크 (password를 보냈으면 passwordCheck도 일치해야 함)
+    if user.password and user.password != user.passwordCheck:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password match failed"
+        )
 
     newUser = auth_service.create_user(ctx, user)
     return build_response_body(ResponseStatus.CREATED, newUser)
