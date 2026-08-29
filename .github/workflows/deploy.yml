@@ -1,0 +1,36 @@
+name: Deploy to EC2
+
+# main에 push될 때마다 EC2에 자동 배포 (수동 실행 버튼도 제공)
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# 배포가 겹치지 않게 한 번에 하나만
+concurrency:
+  group: deploy-ec2
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        env:
+          SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+        run: |
+          install -m 600 /dev/null deploy_key
+          printf '%s\n' "$SSH_KEY" > deploy_key
+          ssh -i deploy_key -o StrictHostKeyChecking=accept-new ec2-user@52.78.214.200 /bin/bash <<'EOS'
+          set -euo pipefail
+          cd /opt/try-angle-server
+          git fetch origin main
+          git checkout -q main
+          git pull --ff-only -q origin main
+          .venv/bin/pip install -q -r requirements.txt
+          sudo systemctl restart tryangle-web
+          sleep 3
+          curl -sf localhost:8080/api/health
+          echo
+          echo "deployed: $(git log --oneline -1)"
+          EOS
