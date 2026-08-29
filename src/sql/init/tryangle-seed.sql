@@ -25,6 +25,9 @@ INSERT INTO tb_img_ctg (name, cDate, uDate) VALUES
 ('남찍사', 1712966400, 1712966400);
 
 -- 3. 태그 시드 데이터
+/* NOTE: tb_tag 테이블이 tryangle-init.sql에 정의되어 있지 않아 실행 시 오류가 나므로 임시 비활성화.
+   tb_tag 스키마가 확정되어 init.sql에 추가되면 이 블록 주석을 해제할 것. */
+/*
 INSERT INTO tb_tag (userId, parentCode, code, tagName, cDate, uDate) VALUES
 (1, NULL, 'MOOD_ROOT', '분위기', 1712966400, 1712966400),
 (1, 'MOOD_ROOT', 'MOOD_CUTE', '러블리', 1712966400, 1712966400),
@@ -109,5 +112,6 @@ INSERT INTO tb_tag (userId, parentCode, code, tagName, cDate, uDate) VALUES
 (1, 'GENDER_ROOT', 'GENDER_0', 'UNKNOWN', 1712966400, 1712966400),
 (1, 'GENDER_ROOT', 'GENDER_1', 'MALE', 1712966400, 1712966400),
 (1, 'GENDER_ROOT', 'GENDER_2', 'FEMALE', 1712966400, 1712966400);
+*/
 
 COMMIT;

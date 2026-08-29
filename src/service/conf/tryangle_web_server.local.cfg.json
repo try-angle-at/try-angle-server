@@ -6,32 +6,36 @@
     "port": 3000,
     "secret_key": "changethis-secret-key",
     "access_token_expire_minutes": 1440,
-
     "http_config": {
-      "allow_origins": ["http://localhost:3000"],
-      "allow_methods": ["*"],
-      "allow_headers": ["*"],
-      "allow_credentials": true
+        "allow_origins": [
+            "http://localhost:3000"
+        ],
+        "allow_methods": [
+            "*"
+        ],
+        "allow_headers": [
+            "*"
+        ],
+        "allow_credentials": true
     },
-    
     "db": {
-      "host": "localhost",
-      "port": 3306,
-      "user": "guest",
-      "password": "abcd1234",
-      "database": "tryangle"
+        "host": "localhost",
+        "port": 3306,
+        "user": "guest",
+        "password": "abcd1234",
+        "database": "tryangle"
     },
-    
-    "r2": {
-      "account_id": "tryangle-images",
-      "bucket_name": "tryangle-images",
-      "region": "auto",
-      "endpoint_url": "https://2a9b33fa7ea08ae491598e555233bddb.r2.cloudflarestorage.com",
-      "public_base_url": "https://pub-a309ad8a0a6e4a629ad982d710e35276.r2.dev",
-      "image_prefix": "images",
-      "upload_url_expire_seconds": 900
+    "storage": {
+        "bucket_name": "project9-83-seoul-s3-541673202328-ap-northeast-2-an",
+        "region": "ap-northeast-2",
+        "endpoint_url": null,
+        "public_base_url": "https://project9-83-seoul-s3-541673202328-ap-northeast-2-an.s3.ap-northeast-2.amazonaws.com",
+        "image_prefix": "images",
+        "upload_url_expire_seconds": 900
     },
-
+    "kakao": {
+        "app_id": null
+    },
     "logger": {
         "level": "debug",
         "path": "./logs/tryangle_web_server.log-%DATE%",
@@ -40,6 +44,5 @@
         "max_files": "3d",
         "rotation": "daily",
         "use_console": true
-    }  
+    }
 }
-  

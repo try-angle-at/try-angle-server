@@ -34,8 +34,9 @@ CREATE TABLE IF NOT EXISTS tb_user (
 	
 	PRIMARY KEY (id),
 	UNIQUE KEY uk_tb_user_email (email) COMMENT 'Email must be unique for login',
+	UNIQUE KEY uk_tb_user_nickname (nickname) COMMENT 'Nickname must be unique (2026-08-25 policy)',
 	KEY idx_tb_user_state (state) COMMENT 'Index for filtering active/inactive users',
-	CONSTRAINT ck_tb_user_state CHECK (state IN (0, 1)) COMMENT 'Enforce binary state values'
+	CONSTRAINT ck_tb_user_state CHECK (state IN (0, 1)) -- Enforce binary state values
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
 	COMMENT 'User account repository - root entity for all access control';
 
@@ -83,9 +84,9 @@ CREATE TABLE IF NOT EXISTS tb_img (
 	KEY idx_tb_img_ctgId (ctgId) COMMENT 'Query images by category',
 	KEY idx_tb_img_rank (useCnt, expWeight, pri) COMMENT 'Composite index for recommendation sorting',
 	CONSTRAINT fk_tb_img_userId FOREIGN KEY (userId) REFERENCES tb_user (id)
-		ON DELETE RESTRICT ON UPDATE CASCADE COMMENT 'Preserve image records with user',
+		ON DELETE RESTRICT ON UPDATE CASCADE, -- Preserve image records with user
 	CONSTRAINT fk_tb_img_ctgId FOREIGN KEY (ctgId) REFERENCES tb_img_ctg (id)
-		ON DELETE RESTRICT ON UPDATE CASCADE COMMENT 'Preserve category structure'
+		ON DELETE RESTRICT ON UPDATE CASCADE -- Preserve category structure
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
 	COMMENT 'Reference image library for fitting guidance - core content repository';
 
@@ -114,10 +115,10 @@ CREATE TABLE IF NOT EXISTS tb_session (
 	KEY idx_tb_session_imgId (imgId) COMMENT 'Query sessions by reference image',
 	KEY idx_tb_session_status_date (sStat, sDate) COMMENT 'Composite index for status/timeline queries',
 	CONSTRAINT fk_tb_session_userId FOREIGN KEY (userId) REFERENCES tb_user (id)
-		ON DELETE RESTRICT ON UPDATE CASCADE COMMENT 'Preserve session history',
+		ON DELETE RESTRICT ON UPDATE CASCADE, -- Preserve session history
 	CONSTRAINT fk_tb_session_imgId FOREIGN KEY (imgId) REFERENCES tb_img (id)
-		ON DELETE RESTRICT ON UPDATE CASCADE COMMENT 'Preserve session-image linkage',
-	CONSTRAINT ck_tb_session_sStat CHECK (sStat IN (0, 1, 2)) COMMENT 'Enforce valid state values'
+		ON DELETE RESTRICT ON UPDATE CASCADE, -- Preserve session-image linkage
+	CONSTRAINT ck_tb_session_sStat CHECK (sStat IN (0, 1, 2)) -- Enforce valid state values
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
 	COMMENT 'Fitting session tracking - links users, reference images, and results';
 
@@ -143,8 +144,8 @@ CREATE TABLE IF NOT EXISTS tb_prod (
 	KEY idx_tb_prod_userId (userId) COMMENT 'Query products by owner/seller',
 	KEY idx_tb_prod_pStat (pStat) COMMENT 'Query active/available products',
 	CONSTRAINT fk_tb_prod_userId FOREIGN KEY (userId) REFERENCES tb_user (id)
-		ON DELETE RESTRICT ON UPDATE CASCADE COMMENT 'Preserve product records',
-	CONSTRAINT ck_tb_prod_pStat CHECK (pStat IN (0, 1, 2)) COMMENT 'Enforce valid product status'
+		ON DELETE RESTRICT ON UPDATE CASCADE, -- Preserve product records
+	CONSTRAINT ck_tb_prod_pStat CHECK (pStat IN (0, 1, 2)) -- Enforce valid product status
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
 	COMMENT 'Product catalog - items tested/evaluated in fitting sessions';
 
@@ -156,7 +157,7 @@ CREATE TABLE IF NOT EXISTS tb_snap (
 	userId BIGINT NOT NULL COMMENT 'Snapshot creator (FK to tb_user)',
 	prodId BIGINT NOT NULL COMMENT 'Product being worn (FK to tb_prod)',
 	imgId BIGINT NOT NULL COMMENT 'Reference image used (FK to tb_img)',
-	sId BIGINT NULL COMMENT 'Associated session (FK to tb_session, nullable, SET NULL on delete)',
+	sId VARCHAR(32) NULL COMMENT 'Associated session (FK to tb_session.id VARCHAR(32), nullable, SET NULL on delete)',
 	
 	-- Storage & Access
 	snapUrl VARCHAR(500) NOT NULL COMMENT 'S3/R2 snapshot file (snaps/YYYY/MM/snap_sId_timestamp.webp)',
@@ -183,14 +184,14 @@ CREATE TABLE IF NOT EXISTS tb_snap (
 	UNIQUE KEY uk_tb_snap_sId (sId) COMMENT 'One snapshot per session (NULL allowed for multiple)',
 	KEY idx_tb_snap_viewCnt (viewCnt) COMMENT 'Sort by popularity/engagement',
 	CONSTRAINT fk_tb_snap_userId FOREIGN KEY (userId) REFERENCES tb_user (id)
-		ON DELETE RESTRICT ON UPDATE CASCADE COMMENT 'Preserve snapshot when user exists',
+		ON DELETE RESTRICT ON UPDATE CASCADE, -- Preserve snapshot when user exists
 	CONSTRAINT fk_tb_snap_prodId FOREIGN KEY (prodId) REFERENCES tb_prod (id)
-		ON DELETE RESTRICT ON UPDATE CASCADE COMMENT 'Preserve snapshot-product link',
+		ON DELETE RESTRICT ON UPDATE CASCADE, -- Preserve snapshot-product link
 	CONSTRAINT fk_tb_snap_imgId FOREIGN KEY (imgId) REFERENCES tb_img (id)
-		ON DELETE RESTRICT ON UPDATE CASCADE COMMENT 'Preserve snapshot-reference link',
+		ON DELETE RESTRICT ON UPDATE CASCADE, -- Preserve snapshot-reference link
 	CONSTRAINT fk_tb_snap_sId FOREIGN KEY (sId) REFERENCES tb_session (id)
-		ON DELETE SET NULL ON UPDATE CASCADE COMMENT 'Keep snapshot if session deleted',
-	CONSTRAINT ck_tb_snap_gender CHECK (gender IN (0, 1, 2)) COMMENT 'Enforce valid gender values'
+		ON DELETE SET NULL ON UPDATE CASCADE, -- Keep snapshot if session deleted
+	CONSTRAINT ck_tb_snap_gender CHECK (gender IN (0, 1, 2)) -- Enforce valid gender values
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
 	COMMENT 'Fitting results - user snapshots wearing evaluated products';
 
@@ -210,9 +211,9 @@ CREATE TABLE IF NOT EXISTS mtb_bookmark (
 	KEY idx_mtb_bookmark_userId (userId) COMMENT 'Query all bookmarks by user',
 	KEY idx_mtb_bookmark_imgId (imgId) COMMENT 'Query bookmarking users of an image',
 	CONSTRAINT fk_mtb_bookmark_userId FOREIGN KEY (userId) REFERENCES tb_user (id)
-		ON DELETE CASCADE ON UPDATE CASCADE COMMENT 'Remove bookmarks when user deleted',
+		ON DELETE CASCADE ON UPDATE CASCADE, -- Remove bookmarks when user deleted
 	CONSTRAINT fk_mtb_bookmark_imgId FOREIGN KEY (imgId) REFERENCES tb_img (id)
-		ON DELETE CASCADE ON UPDATE CASCADE COMMENT 'Remove bookmarks when image deleted'
+		ON DELETE CASCADE ON UPDATE CASCADE -- Remove bookmarks when image deleted
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
 	COMMENT 'User bookmarks on reference images (reserved for future implementation)';
 
@@ -229,9 +230,10 @@ CREATE TABLE IF NOT EXISTS mtb_img_tag (
 	KEY idx_mtb_img_tag_imgId (imgId) COMMENT 'Query all tags applied to an image',
 	KEY idx_mtb_img_tag_tagId (tagId) COMMENT 'Query all images with a tag',
 	CONSTRAINT fk_mtb_img_tag_imgId FOREIGN KEY (imgId) REFERENCES tb_img (id)
-		ON DELETE CASCADE ON UPDATE CASCADE COMMENT 'Remove tag mappings when image deleted',
-	CONSTRAINT fk_mtb_img_tag_tagId FOREIGN KEY (tagId) REFERENCES tb_tag (id)
-		ON DELETE CASCADE ON UPDATE CASCADE COMMENT 'Remove tag mappings when tag deleted'
+		ON DELETE CASCADE ON UPDATE CASCADE -- Remove tag mappings when image deleted
+	-- NOTE: tb_tag 테이블이 아직 정의되지 않아 아래 FK는 보류 (tb_tag 추가 시 복원)
+	-- , CONSTRAINT fk_mtb_img_tag_tagId FOREIGN KEY (tagId) REFERENCES tb_tag (id)
+	--     ON DELETE CASCADE ON UPDATE CASCADE -- Remove tag mappings when tag deleted
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
 	COMMENT 'Image-to-tag mappings (reserved for future implementation)';
 

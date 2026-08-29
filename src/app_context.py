@@ -24,10 +24,9 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import AliasChoices, BaseModel, Field, ValidationError
 
 from src.modules import logger
-from src.modules.system_monitor import SystemMonitor
 from src.handler.db_handler import DBHandler
 
 
@@ -88,17 +87,22 @@ class DBConfig(BaseModel):
     autocommit: bool = True
 
 
-class R2Config(BaseModel):
-    """Cloudflare R2 storage configuration model.
-    
+class StorageConfig(BaseModel):
+    """Object storage configuration model (AWS S3 or S3-compatible, e.g. Cloudflare R2).
+
+    Mode selection:
+        - endpoint_url이 비어 있으면(AWS S3): 자격증명은 boto3 기본 체인을 따른다
+          (EC2에서는 인스턴스 프로파일 IAM Role — 액세스 키 불필요).
+        - endpoint_url이 설정되면(R2 등 S3 호환): access_key_id/secret_access_key 필요.
+
     Attributes:
-        account_id: R2 bucket name or account identifier
-        access_key_id: R2 API access key ID (typically loaded from token file)
-        secret_access_key: R2 API secret key (typically loaded from token file)
+        account_id: (R2) account identifier — S3에서는 미사용
+        access_key_id: (R2) API access key ID — S3(IAM Role)에서는 비워 둠
+        secret_access_key: (R2) API secret key — S3(IAM Role)에서는 비워 둠
         bucket_name: Target bucket name for file uploads
-        region: AWS region code (default: auto)
-        endpoint_url: R2 S3-compatible API endpoint URL
-        public_base_url: Public CDN base URL for served files
+        region: AWS region code (S3: e.g. ap-northeast-2 / R2: auto)
+        endpoint_url: S3-compatible API endpoint URL (AWS S3면 비워 둠)
+        public_base_url: Public base URL for served files
         image_prefix: Prefix path for images within bucket
         upload_url_expire_seconds: Presigned URL expiration time
     """
@@ -111,6 +115,16 @@ class R2Config(BaseModel):
     public_base_url: Optional[str] = None
     image_prefix: str = "images"
     upload_url_expire_seconds: int = 900
+
+
+class KakaoConfig(BaseModel):
+    """카카오 로그인 설정.
+
+    Attributes:
+        app_id: 카카오 개발자 콘솔의 앱 ID(숫자). 설정하면 클라이언트가 보낸
+            액세스 토큰이 우리 앱에서 발급된 것인지 대조한다. None이면 대조 생략(개발용).
+    """
+    app_id: Optional[int] = None
 
 
 class AppConfig(BaseModel):
@@ -129,7 +143,7 @@ class AppConfig(BaseModel):
         access_token_expire_minutes: JWT token expiration time in minutes
         logger: Logger configuration
         http_config: HTTP/CORS configuration (optional)
-        r2: Cloudflare R2 configuration (optional)
+        storage: Object storage configuration — S3 or R2 (optional; 구 설정 키 "r2"도 허용)
         db: Database configuration (optional)
         enable_monitoring: Enable system monitoring (default: True)
         monitoring_interval: System monitoring interval in seconds
@@ -144,7 +158,11 @@ class AppConfig(BaseModel):
 
     logger: LoggerConfig
     http_config: Optional[HTTPConfig] = None
-    r2: Optional[R2Config] = None
+    # 설정 파일의 "storage" 키 (과거 이름 "r2"로 적힌 파일도 그대로 읽힌다)
+    storage: Optional[StorageConfig] = Field(
+        default=None, validation_alias=AliasChoices("storage", "r2")
+    )
+    kakao: Optional[KakaoConfig] = None
     db: Optional[DBConfig] = None
 
     enable_monitoring: bool = True
@@ -162,7 +180,6 @@ class AppContext:
         cfg: Loaded application configuration (AppConfig instance)
         log: Configured logger instance
         db_handler: Database connection handler
-        system_monitor: System monitoring service
     """
 
     def __init__(self) -> None:
@@ -170,7 +187,6 @@ class AppContext:
         self.cfg: Optional[AppConfig] = None
         self.log: Optional[logging.Logger] = None
         self.db_handler: Optional[DBHandler] = None
-        self.system_monitor: Optional[SystemMonitor] = None
 
     def load_config(self, config_path: str) -> AppConfig:
         """Load and parse application configuration from JSON file.
@@ -284,13 +300,13 @@ class AppContext:
             with open(token_file, "rb") as f:
                 tokens = orjson.loads(f.read())
 
-            # Merge R2 credentials
-            if "r2" in tokens and self.cfg.r2:
-                r2_tokens = tokens["r2"]
-                if "access_key_id" in r2_tokens:
-                    self.cfg.r2.access_key_id = r2_tokens["access_key_id"]
-                if "secret_access_key" in r2_tokens:
-                    self.cfg.r2.secret_access_key = r2_tokens["secret_access_key"]
+            # Merge storage credentials (구 키 이름 "r2"도 허용)
+            storage_tokens = tokens.get("storage") or tokens.get("r2")
+            if storage_tokens and self.cfg.storage:
+                if "access_key_id" in storage_tokens:
+                    self.cfg.storage.access_key_id = storage_tokens["access_key_id"]
+                if "secret_access_key" in storage_tokens:
+                    self.cfg.storage.secret_access_key = storage_tokens["secret_access_key"]
 
             print(f"[CONFIG] Successfully loaded and merged tokens from {token_path}")
             return True
@@ -354,7 +370,8 @@ class AppContext:
             
         try:
             self.log.debug("Initializing database handler")
-            self.db_handler = DBHandler(self)
+            # DBHandler는 pymysql.connect(**config)로 풀어 쓰므로 dict를 넘긴다
+            self.db_handler = DBHandler(self.cfg.db.model_dump())
             self.log.debug("Database handler initialized successfully")
             
         except Exception as e:

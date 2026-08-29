@@ -46,6 +46,8 @@ httpx-sse
 huggingface_hub
 idna
 importlib_metadata
+orjson
+passlib
 pydantic
 pydantic-settings
 pydantic_core

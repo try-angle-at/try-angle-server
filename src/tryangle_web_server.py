@@ -71,6 +71,20 @@ class AppFactory:
         # 설정 로드
         ctx.load_config("src/service/conf/tryangle_web_server.local.cfg.json")
 
+        # 처리되지 않은 예외 → JSON 500 변환.
+        # CORS 미들웨어보다 먼저(=안쪽에) 등록해야 오류 응답에도 CORS 헤더가 붙는다.
+        # (없으면 예외가 헤더 없는 text 500으로 나가서 브라우저에서 CORS 오류로 둔갑)
+        @app.middleware("http")
+        async def unhandled_exception_to_json(request, call_next):
+            try:
+                return await call_next(request)
+            except Exception:
+                if ctx.log:
+                    ctx.log.error("Unhandled exception", exc_info=True)
+                else:
+                    traceback.print_exc()
+                return JSONResponse(status_code=500, content=build_error_response(500))
+
         # CORS 설정
         AppFactory._setup_cors(app, ctx)
         
@@ -132,11 +146,8 @@ class AppFactory:
     @staticmethod
     async def _initialize_managers(ctx: AppContext) -> None:
         """매니저 초기화"""
-        print("     - Initializing managers...")   
+        print("     - Initializing managers...")
         ctx._init_logger()
-        AppFactory._test_logging(ctx.log)
-        
-        ctx._init_system_manager()
 
     @staticmethod
     async def _initialize_handlers(ctx: AppContext) -> None:
