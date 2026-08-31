@@ -1,0 +1,114 @@
+"""system 텔레메트리 e2e 검증 — SDK 복원요청 문서의 '완료 확인 시퀀스' 자동화.
+
+사용: BASE_URL/E2E_EMAIL/E2E_PASSWORD 환경변수로 대상 서버 지정 (기본 localhost:8738).
+전제: 계정이 ADMIN 권한(ctg/ref 생성용). 표준 라이브러리 외 requests만 필요.
+주의: ctg/ref/세션 데이터를 생성하므로 운영 DB에서는 실행하지 말 것.
+"""
+import os
+import requests, json, sys
+
+B = os.environ.get("BASE_URL", "http://localhost:8738")
+ok = fail = 0
+def check(name, cond, extra=""):
+    global ok, fail
+    mark = "✅" if cond else "❌"
+    if cond: ok += 1
+    else: fail += 1
+    print(f"{mark} {name}{' — ' + str(extra) if extra and not cond else ''}")
+
+# 1. 회원가입 + 로그인
+requests.post(f"{B}/api/auth/signup", json={"name":"e2e유저","email":os.environ.get("E2E_EMAIL", "e2e@test.com"),"password":os.environ.get("E2E_PASSWORD", "pw123456!"),"passwordCheck":os.environ.get("E2E_PASSWORD", "pw123456!"),"nickname":"e2e"})
+r = requests.post(f"{B}/api/auth/login", json={"email":os.environ.get("E2E_EMAIL", "e2e@test.com"),"password":os.environ.get("E2E_PASSWORD", "pw123456!")})
+tok = r.json()["data"]["accessToken"]; H = {"Authorization": f"Bearer {tok}"}
+check("1. login", r.status_code==200)
+
+# 2. ctg + ref 생성 (session/start 선행조건)
+r = requests.post(f"{B}/api/ctg/create", json={"userId":1,"name":"e2e전신"}, headers=H)
+ctg = r.json()["data"]["id"]
+r = requests.post(f"{B}/api/ref/create", json={"ctgId":ctg,"imgUrl":"reference/e2e.png","title":"e2e ref"}, headers=H)
+img = r.json()["data"]["imgId"]
+check("2. ctg+ref 생성", bool(img))
+
+# 3. session/start
+r = requests.post(f"{B}/api/session/start", json={"imgId":img,"device":{"platform":"iOS","appVersion":"e2e"}}, headers=H)
+sid = r.json()["data"]["id"]
+check("3. session/start", r.status_code==200 and r.json()["status"]["code"]=="S0001" and len(sid)==32, r.text[:120])
+
+# 4. system/send secSeq=1 — gate 6·8 포함 (le=5 제약 금지 증명)
+t0 = 1777986265000
+def frame(fseq, off, gate, phase, cat, fb, stuck, cc, cur=None):
+    return {"fseq":fseq,"tid":t0+off,"offsetMs":off,"phase":phase,"pidx":gate,"gate":gate,
+            "cur":cur or {"pitchDeg":-16.1},
+            "res":{"score":0.49,"passed":cc,"feedback":fb,"category":cat,
+                   "metadata":{"axis":cat,"stuckSec":stuck,"canCapture":cc}}}
+b1 = {"sId":sid,"secSeq":1,"payload":[
+    frame(0,0,3,"CAMERA_ADJUST","pitch","휴대폰 위쪽을 뒤로 기울여주세요",3.2,False),
+    frame(1,33,6,"POSE_MATCH","pose","오른팔을 내려주세요",1.0,False,{"kp":"16140d32"}),
+    frame(2,66,8,"FINALIZE","pose","좋아요, 유지하세요",0.0,True),
+]}
+r = requests.post(f"{B}/api/system/send", json=b1, headers=H)
+check("4. system/send secSeq=1 (gate 6·8 포함)", r.status_code==200 and r.json()["data"]["frameCount"]==3, r.text[:200])
+
+# 5. secSeq=2 — 다른 category/feedback (필터 테스트용)
+b2 = {"sId":sid,"secSeq":2,"payload":[
+    frame(3,0,2,"DISTANCE","distance","50cm 앞으로 다가가세요",5.5,False),
+    frame(4,33,2,"DISTANCE","distance","거리 완벽",0.0,True),
+]}
+r = requests.post(f"{B}/api/system/send", json=b2, headers=H)
+check("5. system/send secSeq=2", r.status_code==200)
+
+# 6. secSeq=1 재전송 → 멱등 (409/500 아님)
+r = requests.post(f"{B}/api/system/send", json=b1, headers=H)
+check("6. 같은 배치 재전송 멱등", r.status_code==200, r.text[:120])
+
+# 7. flushSec / flushSession
+r = requests.post(f"{B}/api/system/flushSec", json={"sId":sid,"secSeq":1}, headers=H)
+check("7a. flushSec", r.status_code==200 and r.json()["data"]["persisted"] is True)
+r = requests.post(f"{B}/api/system/flushSession", json={"sId":sid}, headers=H)
+check("7b. flushSession", r.status_code==200 and r.json()["data"]["persistedSecs"]==2)
+
+# 8. session/detail → 평탄화 스냅샷
+r = requests.post(f"{B}/api/session/detail", json={"id":sid}, headers=H)
+d = r.json()["data"]
+snaps = d["snapshots"]
+check("8. detail snapshots 평탄화", d["secCount"]==2 and d["recordCount"]==5 and len(snaps)==5,
+      f"secCount={d.get('secCount')} recordCount={d.get('recordCount')}")
+check("8a. 프레임 필드 보존 (gate=8, phase)", snaps[2]["gate"]==8 and snaps[2]["phase"]=="FINALIZE" and snaps[0]["cur"]["pitchDeg"]==-16.1)
+
+# 9. detail secSeq 범위 필터
+r = requests.post(f"{B}/api/session/detail", json={"id":sid,"fromSecSeq":2}, headers=H)
+d = r.json()["data"]
+check("9. detail fromSecSeq=2", d["secCount"]==1 and d["recordCount"]==2)
+
+# 10. session/list 집계
+r = requests.post(f"{B}/api/session/list", json={"page":1,"limit":10,"filter":{"userId":d["session"]["userId"]}}, headers=H)
+item = r.json()["data"]["items"][0]
+check("10. list 집계", item["snapshotCount"]==2 and abs(item["maxStuckSec"]-5.5)<0.01 and item["mainFeedback"]=="거리 완벽",
+      json.dumps({k:item.get(k) for k in ("snapshotCount","maxStuckSec","mainFeedback")}, ensure_ascii=False))
+
+# 11. 스냅샷 필터 4종
+def listhit(flt):
+    r = requests.post(f"{B}/api/session/list", json={"page":1,"limit":10,"filter":flt}, headers=H)
+    return r.json()["data"]["total"]
+check("11a. filter feedback 부분일치", listhit({"feedback":"좋아요"})==1)
+check("11b. filter category", listhit({"category":"distance"})==1 and listhit({"category":"없는값"})==0)
+check("11c. filter stuckSec>=5", listhit({"stuckSec":5})==1 and listhit({"stuckSec":6})==0)
+check("11d. filter canCapture", listhit({"canCapture":"true"})==1)
+check("11e. flat body 하위호환", None is not None or requests.post(f"{B}/api/session/list", json={"page":1,"limit":10,"feedback":"좋아요"}, headers=H).json()["data"]["total"]==1)
+
+# 12. session/end → snapshotFlush
+r = requests.post(f"{B}/api/session/end", json={"id":sid}, headers=H)
+d = r.json()["data"]
+check("12. end + snapshotFlush", d["sStat"]==1 and d["snapshotFlush"]["persistedSecs"]==2, r.text[:200])
+
+# 13. 경계 케이스
+r = requests.post(f"{B}/api/system/send", json={**b1,"sId":"없는세션ID없는세션ID없는세션ID없는세션"}, headers=H)
+check("13a. 미존재 sId → 404", r.status_code==404)
+bad = {"sId":sid,"secSeq":3,"payload":[{**b1["payload"][0],"tid":t0+0.5}]}
+r = requests.post(f"{B}/api/system/send", json=bad, headers=H)
+check("13b. tid 소수 → 422", r.status_code==422)
+r = requests.post(f"{B}/api/system/send", json=b1)
+check("13c. 무인증 → 401", r.status_code==401)
+
+print(f"\n결과: {ok} 통과 / {fail} 실패")
+sys.exit(1 if fail else 0)

@@ -2,7 +2,7 @@
 
 > **작성 기준:** 실제 소스코드(`src/service/*/**_api.py`, `**_schema.py`)에서 역추출
 > **대상:** 프론트엔드/앱 개발자
-> **문서 버전:** 2026-08-07
+> **문서 버전:** 2026-08-31 (system 텔레메트리 수신 추가)
 
 ---
 
@@ -22,6 +22,7 @@
    - [6.6 Product](#66-product-apiprod)
    - [6.7 Session](#67-session-apisession)
    - [6.8 Snap](#68-snap-apisnap)
+   - [6.9 System](#69-system-apisystem)
 7. [Enum / 상수 레퍼런스](#7-enum--상수-레퍼런스)
 8. [전체 플로우 예제](#8-전체-플로우-예제)
 9. [알려진 이슈](#9-알려진-이슈-반드시-확인)
@@ -794,7 +795,14 @@ Cloudflare R2 업로드를 담당합니다.
 
 **Request** `{ "id": "a3f8b2c1..." }`
 
-**응답 `data`** — `sStat: 1`, `eDate` 채워진 `SessionItem`
+**응답 `data`** — `sStat: 1`, `eDate` 채워진 세션 + **`snapshotFlush`** (텔레메트리 적재 확정 결과)
+
+```json
+{ "id": "a3f8b2c1...", "sStat": 1, "...": "...",
+  "snapshotFlush": { "sId": "a3f8b2c1...", "flushed": 0, "persistedSecs": 31 } }
+```
+
+> 수신이 DB 직행이라 버퍼가 없어 `flushed`는 항상 `0`이며, `persistedSecs`가 적재된 초 배치 수입니다.
 
 **에러**
 
@@ -825,8 +833,19 @@ Cloudflare R2 업로드를 담당합니다.
 | `userId` / `imgId` / `sStat` | 정확히 일치 |
 | `sDate` | 세션 **시작일 >= 값** |
 | `eDate` | 세션 **시작일 <= 값** ⚠️ 종료일이 아니라 시작일 기준입니다 |
+| `category` | 텔레메트리 판정 카테고리 — 초 배치 요약과 정확히 일치 (예: `pose`, `pitch`) |
+| `feedback` | 가이드 피드백 문구 — **부분 일치** (각 초의 마지막 피드백 기준) |
+| `stuckSec` | 정체 시간 — **값 이상**인 초 배치가 있는 세션 (`0`은 필터 미적용) |
+| `canCapture` | `"true"` / `"false"` 문자열 — 해당 상태의 초 배치가 있는 세션 |
 
 정렬 `sDate DESC` 고정.
+
+**응답 `items[]`에 텔레메트리 집계 3필드가 포함됩니다** (스냅샷이 없으면 `null`/`0`):
+
+```json
+{ "id": "a3f8...", "...": "...",
+  "snapshotCount": 31, "maxStuckSec": 5.5, "mainFeedback": "거리 완벽" }
+```
 
 > ⚠️ **소유권 필터가 자동 적용되지 않습니다.** `userId`를 지정하지 않으면
 > **전체 사용자의 세션이 반환됩니다.** 마이페이지 용도라면 클라이언트가
@@ -834,21 +853,39 @@ Cloudflare R2 업로드를 담당합니다.
 
 ---
 
-#### `POST /api/session/detail` — 세션 상세
+#### `POST /api/session/detail` — 세션 상세 (+ 프레임 스냅샷)
 
 **인증** User · **소유자 또는 Admin만 조회 가능**
 
-**Request** `{ "id": "a3f8b2c1..." }`
+**Request**
 
-**응답 `data`** — ⚠️ **`session` 키로 한 번 더 감싸집니다**
+| 필드 | 타입 | 필수 | 설명 |
+|---|---|:-:|---|
+| `id` | string | ✅ | 세션 ID |
+| `fromSecSeq` | int | — | 이 초 번호부터 (>=1) |
+| `toSecSeq` | int | — | 이 초 번호까지 |
+
+**응답 `data`** — ⚠️ **`session` 키로 한 번 더 감싸지고**, 텔레메트리 프레임이 평탄화 배열로 함께 옵니다
 
 ```json
 {
   "data": {
-    "session": { "id": "a3f8b2c1...", "userId": 4, "sStat": 0, "...": "..." }
+    "session": { "id": "a3f8b2c1...", "userId": 4, "sStat": 0, "snapshotCount": 31, "...": "..." },
+    "snapshots": [
+      { "tid": 1777986265496, "fseq": 720, "offsetMs": 0,
+        "gate": 5, "phase": "CAMERA_ADJUST", "pidx": 5,
+        "cur": { "kp": "16140d32…", "...": "..." },
+        "res": { "score": 0.49, "passed": false, "feedback": "…", "category": "pitch",
+                 "metadata": { "stuckSec": 3.2, "canCapture": false } } }
+    ],
+    "secCount": 31,
+    "recordCount": 930
   }
 }
 ```
+
+- `snapshots[]`는 `secSeq` 오름차순으로 각 초 배치의 프레임을 이어붙인 것 (admin 리플레이 화면이 소비하는 구조)
+- 프레임 필드는 전부 옵션 — 클라이언트가 보낸 것만 그대로 돌아옵니다
 
 **에러** — 403 `Session access denied`, 404 `Session not found`
 
@@ -951,6 +988,84 @@ Cloudflare R2 업로드를 담당합니다.
 
 ---
 
+### 6.9 System (`/api/system`)
+
+**앱 실시간 텔레메트리 수신.** 촬영 세션 중 앱이 프레임 코칭 로그를 1초 = 1배치로 전송합니다.
+계약: `session/start` → **`system/send` 반복 (secSeq 증가)** → `session/end`.
+조회는 [`session/detail`](#67-session-apisession)의 `snapshots[]`와 `session/list` 집계로 합니다.
+
+#### `POST /api/system/send` — 프레임 배치 수신 ★
+
+**인증** User
+
+**Request**
+
+| 필드 | 타입 | 필수 | 설명 |
+|---|---|:-:|---|
+| `sId` | string | ✅ | 세션 ID (`session/start` 응답 `data.id`) |
+| `secSeq` | int | ✅ | 세션 N번째 초 (1부터). **같은 secSeq 재전송 시 덮어씀 (멱등)** |
+| `payload` | array | ✅ | 그 초의 프레임 목록 (1~30개 가변, `offsetMs` 오름차순) |
+
+**`payload[]` 프레임** — 시퀀싱 3필드만 검증, 나머지는 무검증 통과 후 원형 저장:
+
+| 필드 | 타입 | 필수 | 설명 |
+|---|---|:-:|---|
+| `fseq` | int | ✅ | 세션 전역 프레임 번호 (초를 넘어 연속) |
+| `tid` | int | ✅ | 프레임 절대시각 unix **ms** — ⚠️ 정수만. 소수면 422 |
+| `offsetMs` | int | ✅ | 그 초 안 경과 ms (매 초 첫 프레임에서 0 리셋) |
+| `gate` | int | — | 게이트 번호 (0~8). **상한 검증 없음** — 값 추가에 열려 있음 |
+| `phase` / `pidx` | str / int | — | 촬영 단계 / 단계 인덱스 |
+| `cur` / `res` | object | — | 현재 상태 / 판정 결과 — **서버 무검증, 통째 저장** |
+
+```json
+{
+  "sId": "aa7c7ef8ad0047caadd16812c6638e8f",
+  "secSeq": 25,
+  "payload": [
+    { "fseq": 720, "tid": 1777986265496, "offsetMs": 0,
+      "phase": "CAMERA_ADJUST", "pidx": 5, "gate": 5,
+      "cur": { "torsoDistM": 2.37, "pitchDeg": -16.1, "kp": "16140d32…" },
+      "res": { "score": 0.49, "passed": false,
+               "feedback": "휴대폰 위쪽을 뒤로 기울여주세요", "category": "pitch",
+               "metadata": { "stuckSec": 3.2, "canCapture": false } } }
+  ]
+}
+```
+
+**응답 `data`** `{ "sId": "...", "secSeq": 25, "frameCount": 28, "stored": true }`
+
+**에러**
+
+| HTTP | detail |
+|---|---|
+| 404 | `Session not found` — 존재하지 않는 `sId` |
+| 422 | 시퀀싱 필드 타입 오류 (`tid` 소수 등) |
+
+> 서버는 수신 즉시 DB(`tb_rt_snapshot`)에 저장합니다 (1배치 = 1행).
+> `res.category`/`res.feedback`(그 초의 마지막 값), `metadata.stuckSec`(최대),
+> `metadata.canCapture`(하나라도 true면 true)가 조회용 요약 컬럼으로 함께 적재되어
+> `session/list` 필터·집계의 기준이 됩니다.
+
+#### `POST /api/system/flushSec` · `POST /api/system/flushSession` — 적재 확정
+
+**인증** User · 멱등 (몇 번을 호출해도 안전)
+
+| 엔드포인트 | Request | 응답 `data` |
+|---|---|---|
+| `/api/system/flushSec` | `{ "sId": "...", "secSeq": 25 }` | `{ "sId", "secSeq", "flushed": 0, "persisted": true }` |
+| `/api/system/flushSession` | `{ "sId": "..." }` | `{ "sId", "flushed": 0, "persistedSecs": 31 }` |
+
+> 수신이 DB 직행이라 서버에 버퍼가 없습니다. `flushed`는 항상 `0`이고,
+> `persisted`/`persistedSecs`로 적재 여부를 확인하는 용도입니다.
+> (6월 구서버의 RabbitMQ+Redis 버퍼 구조에서 계약만 유지한 것 — 앱 수정 불필요)
+
+**에러** — 404 `Session not found`
+
+> ⚠️ `src/service/logging/`의 `/api/system/log`·`/api/system/search`는 별개의
+> 개발용 시뮬레이터(라우터 미등록)입니다. 텔레메트리 수신 정본은 이 섹션입니다.
+
+---
+
 ## 7. Enum / 상수 레퍼런스
 
 ### UserRole (문자열)
@@ -1042,7 +1157,9 @@ Cloudflare R2 업로드를 담당합니다.
    POST /api/session/start       { imgId: 1001, device: {...} }
    → data.id (32자 sId) 보관
 
-   ────── 앱 내부 온디바이스 코칭 (gate 0~5). 서버 호출 없음 ──────
+   ────── 앱 내부 온디바이스 코칭. 촬영 중 아래를 1초마다 반복 ──────
+5-1) 프레임 로그 전송 (반복)
+   POST /api/system/send        { sId, secSeq: 1,2,3…, payload: [프레임…] }
 
 6) 결과 사진 업로드
    POST /api/files/create        multipart: file, type="snap"
@@ -1072,12 +1189,12 @@ Cloudflare R2 업로드를 담당합니다.
 
 프론트엔드 구현 시 영향을 주는 사항입니다.
 
-### 🔴 서버 기동 불가 (2026-08-07 기준)
+### ✅ 해결됨: 서버 기동 불가 (2026-08-29 수복)
 
-`main` 브랜치는 **임포트 단계에서 실패해 실행되지 않습니다.** 삭제된 모듈
-(`src.utils.db_utils`, `src.core.id_generator`, `src.modules.system_monitor`)을
-참조 중이고, `src/core/responses.py`의 성공 응답 헬퍼에도 버그가 있습니다.
-**API 연동 전 백엔드 담당자에게 기동 가능 여부를 먼저 확인하세요.**
+~~2026-08-07 기준 `main`은 임포트 단계에서 실패했으나~~, #2(기동 수정 + S3 전환 +
+카카오 로그인)에서 수복되어 현재 기동·운영 배포 중입니다.
+⚠️ #2의 변경분(카카오 로그인, S3 전환, 입력값 검증 강화, ctg/ref 권한 변경 등)은
+본 문서에 아직 전면 반영되지 않았습니다 — 해당 영역은 코드를 우선하세요.
 
 ### 🟠 계약에 영향을 주는 사항
 
@@ -1102,7 +1219,7 @@ Cloudflare R2 업로드를 담당합니다.
 
 - `/api/tag/*` — 태그 CRUD. `kwd` 코드는 하드코딩 필요
 - `/api/bmk/*` — 북마크
-- `/api/system/log`, `/api/system/search` — 로그 수집·검색 (라우터 미등록)
+- ~~실시간 텔레메트리 수신~~ → **6.9 System으로 구현됨** (`/api/system/log`·`search`는 별개 시뮬레이터, 여전히 미등록)
 - 체형(`userH`/`userW`/`gender`) 기반 스냅 검색
 - 레퍼런스 추천 정렬 (`expWeight`/`pri` 미사용)
 
