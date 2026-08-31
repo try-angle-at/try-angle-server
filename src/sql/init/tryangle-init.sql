@@ -96,7 +96,8 @@ CREATE TABLE IF NOT EXISTS tb_session (
 	
 	-- Session Context
 	userId BIGINT NOT NULL COMMENT 'Session participant (FK to tb_user)',
-	imgId BIGINT NOT NULL COMMENT 'Reference image used (FK to tb_img)',
+	imgId BIGINT NULL COMMENT 'Reference image used (FK to tb_img, NULL for direct mode)',
+	mode VARCHAR(16) NOT NULL DEFAULT 'fashion_ref' COMMENT 'Entry flow: fashion_ref | aesthetic_ref | direct (soft enum, doc-managed)',
 	
 	-- Timing
 	sDate BIGINT NOT NULL COMMENT 'Session start timestamp (Unix epoch)',
@@ -114,6 +115,7 @@ CREATE TABLE IF NOT EXISTS tb_session (
 	KEY idx_tb_session_userId (userId) COMMENT 'Query sessions by user',
 	KEY idx_tb_session_imgId (imgId) COMMENT 'Query sessions by reference image',
 	KEY idx_tb_session_status_date (sStat, sDate) COMMENT 'Composite index for status/timeline queries',
+	KEY idx_tb_session_mode_date (mode, sDate) COMMENT 'Admin per-mode listing/statistics',
 	CONSTRAINT fk_tb_session_userId FOREIGN KEY (userId) REFERENCES tb_user (id)
 		ON DELETE RESTRICT ON UPDATE CASCADE, -- Preserve session history
 	CONSTRAINT fk_tb_session_imgId FOREIGN KEY (imgId) REFERENCES tb_img (id)
@@ -265,6 +267,40 @@ CREATE TABLE IF NOT EXISTS tb_rt_snapshot (
 	-- CASCADE: session logs have no meaning without their session
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
 	COMMENT 'Realtime coaching telemetry - per-second frame batches from the app';
+
+
+CREATE TABLE IF NOT EXISTS tb_capture (
+	-- Primary identifier
+	id BIGINT NOT NULL AUTO_INCREMENT,
+
+	-- Ownership & Linkage
+	userId BIGINT NOT NULL COMMENT 'Capture creator (FK to tb_user)',
+	sId VARCHAR(32) NULL COMMENT 'Linked session (FK to tb_session, telemetry join key, SET NULL on delete)',
+	imgId BIGINT NULL COMMENT 'Reference image (FK to tb_img, set for aesthetic_ref captures)',
+
+	-- Capture semantics
+	mode VARCHAR(16) NOT NULL COMMENT 'Effective state at shutter: aesthetic_ref | direct | ai_director (soft enum)',
+	captureUrl VARCHAR(500) NOT NULL COMMENT 'S3 file path from files/create (type=capture)',
+	analysis JSON NULL COMMENT 'Shutter-moment judgement summary - unvalidated, schema owned by SDK',
+	capturedAt BIGINT NOT NULL COMMENT 'Capture timestamp (unix ms, per SDK v6 convention)',
+
+	-- Audit
+	cDate BIGINT NOT NULL COMMENT 'Record creation timestamp (unix sec)',
+	uDate BIGINT NOT NULL COMMENT 'Last modification timestamp (unix sec)',
+
+	PRIMARY KEY (id),
+	KEY idx_tb_capture_user_mode_time (userId, mode, capturedAt) COMMENT 'Per-user per-mode timeline queries',
+	KEY idx_tb_capture_sId (sId),
+	KEY idx_tb_capture_imgId (imgId),
+	CONSTRAINT fk_tb_capture_userId FOREIGN KEY (userId) REFERENCES tb_user (id)
+		ON DELETE RESTRICT ON UPDATE CASCADE,
+	CONSTRAINT fk_tb_capture_sId FOREIGN KEY (sId) REFERENCES tb_session (id)
+		ON DELETE SET NULL ON UPDATE CASCADE,
+	-- SET NULL: capture outlives its reference (user's own photo must survive catalog changes)
+	CONSTRAINT fk_tb_capture_imgId FOREIGN KEY (imgId) REFERENCES tb_img (id)
+		ON DELETE SET NULL ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
+	COMMENT 'General capture results (aesthetic/direct/AI-director) - non-commerce photo archive';
 
 COMMIT;
 

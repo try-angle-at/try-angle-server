@@ -2,7 +2,7 @@
 
 > **작성 기준:** 실제 소스코드(`src/service/*/**_api.py`, `**_schema.py`)에서 역추출
 > **대상:** 프론트엔드/앱 개발자
-> **문서 버전:** 2026-08-31 (system 텔레메트리 수신 추가)
+> **문서 버전:** 2026-08-31 (system 텔레메트리 + 3모드 촬영 계약)
 
 ---
 
@@ -23,6 +23,7 @@
    - [6.7 Session](#67-session-apisession)
    - [6.8 Snap](#68-snap-apisnap)
    - [6.9 System](#69-system-apisystem)
+   - [6.10 Capture](#610-capture-apicapture)
 7. [Enum / 상수 레퍼런스](#7-enum--상수-레퍼런스)
 8. [전체 플로우 예제](#8-전체-플로우-예제)
 9. [알려진 이슈](#9-알려진-이슈-반드시-확인)
@@ -419,6 +420,7 @@ Cloudflare R2 업로드를 담당합니다.
 | `prod` | `prod/` | `prod_{8자리hex}_{timestamp}.ext` |
 | `reference` | `reference/` | `ref_{8자리hex}_{timestamp}.ext` |
 | `snap` | `snaps/YYYY/MM/` | `snap_u{userId}_{timestamp}.ext` |
+| `capture` | `captures/YYYY/MM/` | `cap_u{userId}_{timestamp}.ext` — 일반 촬영 결과(3모드)용 |
 | `temp` | `temp/` | `tmp_{8자리hex}_{timestamp}.ext` |
 
 **제약**
@@ -746,8 +748,21 @@ Cloudflare R2 업로드를 담당합니다.
 
 | 필드 | 타입 | 필수 | 설명 |
 |---|---|:-:|---|
-| `imgId` | int | ✅ | 참조할 레퍼런스 이미지 ID |
+| `imgId` | int | ⚠️ | 레퍼런스 이미지 ID — **`mode`가 `direct`가 아니면 필수**, `direct`면 무시(null 저장) |
+| `mode` | string | — | 진입 플로우. 기본 `fashion_ref`. 알려진 값: `fashion_ref` \| `aesthetic_ref` \| `direct` (soft enum, ≤16자) |
 | `device` | object | — | 기기 메타데이터 (자유 JSON) |
+
+**`mode` 규칙 (3모드 계약)**
+
+| mode | 의미 | imgId | 촬영 결과 저장처 |
+|---|---|:-:|---|
+| `fashion_ref` | 패션커머스 레퍼런스 따라찍기 (기존 플로우) | 필수 | `snap` (무변경) |
+| `aesthetic_ref` | 예쁜사진 레퍼런스 따라찍기 | 필수 | `capture` |
+| `direct` | 바로찍기 (AI 버튼 on/off는 capture.mode로 구분) | 무시 | `capture` |
+
+- **하위호환**: `mode` 미전송 = `fashion_ref` — 기존 클라이언트 무변경 통과
+- **과도기 승격**: `mode` 미전송이고 `device.mode`가 유효한 문자열이면 그 값을 사용
+- 미지의 신규 mode 값은 레퍼런스 기반으로 취급(imgId 필수) — 안전한 기본값
 
 ```json
 {
@@ -784,8 +799,11 @@ Cloudflare R2 업로드를 담당합니다.
 | HTTP | detail |
 |---|---|
 | 404 | `Reference image not found` |
+| 422 | `imgId is required for mode '...'` — direct 외 모드에서 imgId 누락 |
 | 500 | `Failed to start session` |
 | 503 | `Could not allocate unique session ID` (ID 충돌 5회 재시도 실패) |
+
+응답 `data`에 `mode`가 포함됩니다 (모든 세션 응답 공통).
 
 ---
 
@@ -831,6 +849,7 @@ Cloudflare R2 업로드를 담당합니다.
 | 필터 | 동작 |
 |---|---|
 | `userId` / `imgId` / `sStat` | 정확히 일치 |
+| `mode` | 진입 플로우 정확히 일치 (`fashion_ref`/`aesthetic_ref`/`direct`) |
 | `sDate` | 세션 **시작일 >= 값** |
 | `eDate` | 세션 **시작일 <= 값** ⚠️ 종료일이 아니라 시작일 기준입니다 |
 | `category` | 텔레메트리 판정 카테고리 — 초 배치 요약과 정확히 일치 (예: `pose`, `pitch`) |
@@ -1072,6 +1091,69 @@ Cloudflare R2 업로드를 담당합니다.
 
 ---
 
+### 6.10 Capture (`/api/capture`)
+
+**일반 촬영 결과 아카이브** (3모드 계약). 커머스 후기인 `snap`과 달리 상품 연결이 없는
+사적 촬영물입니다 — `aesthetic_ref`(예쁜사진 레퍼런스) / `direct`(바로찍기) /
+`ai_director`(바로찍기 + AI 촬영모드 on) 결과가 여기 저장됩니다.
+
+> 🔒 **snap과 권한 모델이 다릅니다**: 목록·상세 모두 **본인 것만** 접근 가능 (Admin 제외).
+> 공개 피드가 필요해지면 별도 협의로 엽니다.
+
+#### `POST /api/capture/create` — 캡처 등록
+
+**인증** User · **HTTP 200 + `S0001`**
+
+| 필드 | 타입 | 필수 | 설명 |
+|---|---|:-:|---|
+| `mode` | string | ✅ | 촬영 순간 유효 상태: `aesthetic_ref` \| `direct` \| `ai_director` (soft enum, ≤16자) |
+| `captureUrl` | string | ✅ | 사진 경로 — `files/create`(type=`capture`)의 `url` (≤500자) |
+| `capturedAt` | int | ✅ | 촬영 시각 **unix ms** |
+| `sId` | string | — | 촬영 세션 ID (텔레메트리 조인 키). **본인 세션만** — 타인 세션이면 403 |
+| `imgId` | int | — | 레퍼런스 ID (`aesthetic_ref`일 때) |
+| `analysis` | object | — | 촬영 순간 판정 요약 — **무검증 JSON 통과** (스키마는 SDK 소유, NaN은 null 치환) |
+
+한 `direct` 세션 안에 `direct` 사진과 `ai_director` 사진이 섞여 있는 것이 정상입니다.
+
+**에러** — 400 `Session not found` / `Reference image not found`, 403 `Session access denied`
+
+#### `POST /api/capture/list` — 캡처 목록
+
+**인증** User · **비-admin은 본인 것만** (userId 필터를 보내도 본인으로 강제)
+
+```json
+{ "page": 1, "limit": 20,
+  "filter": { "mode": "ai_director", "imgId": 1001, "sId": "...", "fromDate": 1777986265000, "toDate": 1777990000000 },
+  "sortBy": "capturedAt", "sortOrder": "desc" }
+```
+
+| 필드 | 허용값 | 기본값 |
+|---|---|---|
+| `sortBy` | `capturedAt` / `cDate` / `id` | `capturedAt` |
+| `sortOrder` | `asc` / `desc` | `desc` |
+
+`fromDate`/`toDate`는 **capturedAt(unix ms) 기준**입니다. flat body도 지원(snap과 동일 관례).
+
+**응답 `data.items[]`**
+
+```json
+{ "id": 12, "userId": 4, "userName": "예공이", "sId": "a3f8...", "imgId": null,
+  "mode": "ai_director", "captureUrl": "captures/2026/08/cap_u4_...jpg",
+  "analysis": { "score": 0.91 }, "capturedAt": 1777986265496,
+  "cDate": 1756640000, "uDate": 1756640000 }
+```
+
+#### `POST /api/capture/get` · `POST /api/capture/delete`
+
+| 엔드포인트 | 인증 | Request | 응답 `data` |
+|---|---|---|---|
+| `/api/capture/get` | User (본인/Admin) | `{ "id": 12 }` | `CaptureItem` |
+| `/api/capture/delete` | **Admin** | `{ "id": 12 }` | `{ "id": 12 }` |
+
+**에러** — 403 `Capture access denied`, 404 `Capture not found`
+
+---
+
 ## 7. Enum / 상수 레퍼런스
 
 ### UserRole (문자열)
@@ -1095,6 +1177,15 @@ Cloudflare R2 업로드를 담당합니다.
 |---|---|
 | `"1"` | 인증 완료 |
 | `"2"` | 미인증 (기본값) |
+
+### session.mode / capture.mode (soft enum — 서버는 ≤16자 문자열로 저장)
+
+| session.mode | capture.mode | 의미 |
+|---|---|---|
+| `fashion_ref` | — (결과는 snap) | 커머스 레퍼런스 따라찍기 |
+| `aesthetic_ref` | `aesthetic_ref` | 예쁜사진 레퍼런스 따라찍기 |
+| `direct` | `direct` | 바로찍기, AI 꺼짐 |
+| `direct` | `ai_director` | 바로찍기, **AI 촬영모드 켠 순간의 사진** |
 
 ### SessionStatus — `sStat`
 
