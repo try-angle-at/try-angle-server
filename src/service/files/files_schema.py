@@ -29,6 +29,11 @@ UPLOAD_CONFIG = {
         "prefix": "snap_",
         "useDatePath": True,
     },
+    "capture": {
+        "path": "captures/",  # 일반 촬영 결과 (3모드 계약) — YYYY/MM 동적 추가
+        "prefix": "cap_",
+        "useDatePath": True,
+    },
     "temp": {
         "path": "temp/",
         "prefix": "tmp_",

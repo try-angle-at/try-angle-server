@@ -87,7 +87,7 @@ async def save_file(
     if upload_cfg.get("useDatePath"):
         folder = f"{folder}/{tm.tm_year}/{tm.tm_mon:02d}"
 
-    if upload_type == "snap":
+    if upload_type in ("snap", "capture"):
         if user_id is None:
             raise HTTPException(status_code=400, detail="user id is required for this upload type")
         id_part = f"u{user_id}"

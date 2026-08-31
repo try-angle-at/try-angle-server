@@ -12,8 +12,12 @@ class SessionStatus(IntEnum):
 
 
 class SessionStartRequest(BaseModel):
-    imgId: int = Field(..., description="레퍼런스 이미지 ID")
-    device: Optional[dict[str, Any]] = Field(None, description="디바이스 메타데이터")
+    """mode는 하드 enum 검증 없이 VARCHAR(16) 저장 — 값 추가 시 서버 재배포가
+    필요 없도록(SDK 제안 §3-1). 알려진 값: fashion_ref | aesthetic_ref | direct.
+    규칙: mode != direct 면 imgId 필수, direct 면 imgId 무시(null 저장)."""
+    imgId: Optional[int] = Field(None, description="레퍼런스 이미지 ID (fashion_ref/aesthetic_ref 필수, direct는 없음)")
+    mode: str = Field("fashion_ref", min_length=1, max_length=16, description="진입 플로우: fashion_ref | aesthetic_ref | direct")
+    device: Optional[dict[str, Any]] = Field(None, description="디바이스 메타데이터 (과도기: device.mode가 있으면 mode 미전송 시 승격)")
 
 
 class SessionEndRequest(BaseModel):
@@ -24,6 +28,7 @@ class SessionListFilter(BaseModel):
     userId: Optional[int] = Field(None, description="사용자 ID 필터")
     imgId: Optional[int] = Field(None, description="레퍼런스 이미지 ID 필터")
     sStat: Optional[int] = Field(None, description="세션 상태 필터")
+    mode: Optional[str] = Field(None, max_length=16, description="진입 플로우 필터 (fashion_ref | aesthetic_ref | direct)")
     sDate: Optional[int] = Field(None, description="시작일(from) Unix Timestamp")
     eDate: Optional[int] = Field(None, description="시작일(to) Unix Timestamp")
     # 실시간 스냅샷(tb_rt_snapshot) 기반 필터 — admin SysList가 전송
@@ -50,6 +55,7 @@ class SessionListRequest(BaseModel):
     userId: Optional[int] = Field(None, description="사용자 ID 필터")
     imgId: Optional[int] = Field(None, description="레퍼런스 이미지 ID 필터")
     sStat: Optional[int] = Field(None, description="세션 상태 필터")
+    mode: Optional[str] = Field(None, max_length=16, description="진입 플로우 필터")
     sDate: Optional[int] = Field(None, description="시작일(from) Unix Timestamp")
     eDate: Optional[int] = Field(None, description="시작일(to) Unix Timestamp")
     category: Optional[str] = Field(None, description="판정 카테고리 필터")
@@ -76,7 +82,8 @@ class SessionItem(BaseModel):
     id: str
     userId: int
     userName: Optional[str] = None
-    imgId: int
+    imgId: Optional[int] = None
+    mode: str = "fashion_ref"
     sDate: int
     eDate: Optional[int] = None
     device: Optional[dict[str, Any]] = None

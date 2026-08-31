@@ -27,6 +27,7 @@ from src.service.prod.prod_api import router as prod_router
 from src.service.session.session_api import router as session_router
 from src.service.snap.snap_api import router as snap_router
 from src.service.system.system_api import router as system_router
+from src.service.capture.capture_api import router as capture_router
 
 class AppFactory:
     """애플리케이션 팩토리 클래스"""
@@ -120,6 +121,7 @@ class AppFactory:
             session_router,
             snap_router,
             system_router,
+            capture_router,
         ]
         for router in routers:
             app.include_router(router)

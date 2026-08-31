@@ -43,7 +43,8 @@ _Q = {
                 s.device,
                 s.sStat,
                 s.cDate,
-                s.uDate{_AGG_COLS}
+                s.uDate,
+                s.mode{_AGG_COLS}
             FROM tb_session s
             LEFT JOIN tb_user u ON u.id = s.userId
             WHERE s.id = %s
@@ -51,7 +52,7 @@ _Q = {
     "LB": f"""
         SELECT
             s.id, s.userId, u.nickname AS userName, s.imgId,
-            s.sDate, s.eDate, s.device, s.sStat, s.cDate, s.uDate{_AGG_COLS}
+            s.sDate, s.eDate, s.device, s.sStat, s.cDate, s.uDate, s.mode{_AGG_COLS}
         FROM tb_session s
         LEFT JOIN tb_user u ON s.userId = u.id
         WHERE 1=1
@@ -63,8 +64,8 @@ _Q = {
         WHERE 1=1
     """,
     "SI": """
-        INSERT INTO tb_session (id, userId, imgId, sDate, eDate, device, sStat, cDate, uDate)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO tb_session (id, userId, imgId, mode, sDate, eDate, device, sStat, cDate, uDate)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """,
     "SU": """
         UPDATE tb_session
@@ -85,6 +86,7 @@ _Q = {
 
 _W = {
     "user": "AND s.userId = %s",
+    "mode": "AND s.mode = %s",
     "img": "AND s.imgId = %s",
     "stat": "AND s.sStat = %s",
     "sdate": "AND s.sDate >= %s",
@@ -117,9 +119,10 @@ def _row_to_session_item(row: tuple) -> SessionItem:
         sStat=row[7],
         cDate=row[8],
         uDate=row[9],
-        maxStuckSec=row[10] if len(row) > 10 else None,
-        snapshotCount=row[11] if len(row) > 11 else None,
-        mainFeedback=row[12] if len(row) > 12 else None,
+        mode=row[10] if len(row) > 10 and row[10] is not None else "fashion_ref",
+        maxStuckSec=row[11] if len(row) > 11 else None,
+        snapshotCount=row[12] if len(row) > 12 else None,
+        mainFeedback=row[13] if len(row) > 13 else None,
     )
 
 
@@ -166,6 +169,7 @@ def _list_sessions_impl(
     user_id: int = None,
     img_id: int = None,
     s_stat: int = None,
+    mode: str = None,
     sDate: int = None,
     eDate: int = None,
     category: str = None,
@@ -180,7 +184,7 @@ def _list_sessions_impl(
     where_clauses: list[str] = []
     base_params: list = []
 
-    for k, v in (("user", user_id), ("img", img_id), ("stat", s_stat), ("sdate", sDate), ("edate", eDate)):
+    for k, v in (("user", user_id), ("img", img_id), ("stat", s_stat), ("mode", mode), ("sdate", sDate), ("edate", eDate)):
         if v is None:
             continue
         where_clauses.append(_W[k])
@@ -278,13 +282,38 @@ def _get_session_detail_impl(
     )
 
 
+def _resolve_mode(payload: SessionStartRequest) -> str:
+    """mode 결정: 명시 전송 > device.mode 승격(과도기, SDK 제안 §3-1) > 기본값.
+
+    model_fields_set으로 '미전송'과 '기본값 전송'을 구분한다 — 구 클라이언트가
+    mode 없이 보내는 동안 잠정적으로 device.mode에 실어 보내기로 합의됨."""
+    if "mode" in payload.model_fields_set:
+        resolved = payload.mode.strip()
+        return resolved or "fashion_ref"
+    device = payload.device if isinstance(payload.device, dict) else None
+    if device:
+        dm = device.get("mode")
+        if isinstance(dm, str) and 0 < len(dm.strip()) <= 16:
+            return dm.strip()
+    return "fashion_ref"
+
+
 def _start_session_impl(ctx: AppContext, payload: SessionStartRequest, user_id: int) -> SessionItem:
     if not ctx.db_handler:
         raise HTTPException(status_code=500, detail="Database not initialized")
 
-    img_rows = execute_query(ctx.db_handler, "SELECT id FROM tb_img WHERE id = %s", (payload.imgId,))
-    if not img_rows:
-        raise HTTPException(status_code=404, detail="Reference image not found")
+    mode = _resolve_mode(payload)
+    if mode == "direct":
+        # 바로찍기: 레퍼런스 없음. imgId가 와도 무시하고 null 저장 (계약 §2-1)
+        img_id = None
+    else:
+        # direct 외 모든 모드(미지의 신규 값 포함)는 레퍼런스 기반으로 취급 — 안전한 기본
+        if payload.imgId is None:
+            raise HTTPException(status_code=422, detail=f"imgId is required for mode '{mode}'")
+        img_rows = execute_query(ctx.db_handler, "SELECT id FROM tb_img WHERE id = %s", (payload.imgId,))
+        if not img_rows:
+            raise HTTPException(status_code=404, detail="Reference image not found")
+        img_id = payload.imgId
 
     now = int(time.time())
     device_json = json.dumps(payload.device, ensure_ascii=False) if payload.device is not None else None
@@ -296,7 +325,8 @@ def _start_session_impl(ctx: AppContext, payload: SessionStartRequest, user_id: 
             params = (
                 session_id,
                 user_id,
-                payload.imgId,
+                img_id,
+                mode,
                 now,
                 None,
                 device_json,
@@ -373,6 +403,7 @@ def _norm_filter(payload: SessionListRequest) -> tuple:
         pick("userId"),
         pick("imgId"),
         pick("sStat"),
+        pick("mode"),
         pick("sDate"),
         pick("eDate"),
         pick("category"),
@@ -384,7 +415,7 @@ def _norm_filter(payload: SessionListRequest) -> tuple:
 
 def _invoke(ctx, op: str, payload, user: dict):
     if op == "L":
-        user_id, img_id, s_stat, s_date, e_date, category, feedback, stuck_sec, can_capture = _norm_filter(payload)
+        user_id, img_id, s_stat, mode, s_date, e_date, category, feedback, stuck_sec, can_capture = _norm_filter(payload)
         # 비-admin은 항상 본인 세션만 — list가 타인 텔레메트리 집계(mainFeedback 등)를
         # 노출하지 않도록 detail의 소유권 규칙과 대칭을 맞춘다
         if not _is_admin_role(user.get("role")):
@@ -396,6 +427,7 @@ def _invoke(ctx, op: str, payload, user: dict):
             user_id=user_id,
             img_id=img_id,
             s_stat=s_stat,
+            mode=mode,
             sDate=s_date,
             eDate=e_date,
             category=category,
