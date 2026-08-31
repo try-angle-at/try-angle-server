@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from src.app_context import AppContext
 from src.service.auth.auth_schema import UserRole
 from src.utils.db_utils import execute_query
+from src.utils.payload_utils import sanitize_json
 from src.service.system.system_schema import SystemSendRequest, TelemetryFrame
 
 # 6월 배포 서버는 RabbitMQ+Redis 버퍼를 거쳐 tb_rt_snapshot에 적재했으나,
@@ -51,18 +52,6 @@ def _ensure_session_writable(ctx: AppContext, session_id: str, user: dict) -> No
         return
     if rows[0][0] != user.get("id"):
         raise HTTPException(status_code=403, detail="Session access denied")
-
-
-def _sanitize_json(value):
-    """NaN/Infinity를 None으로 치환. json.dumps는 bare NaN 토큰을 방출하고
-    MySQL JSON 컬럼이 이를 거부(3140)해 배치가 영구 실패하므로 저장 전에 소독한다."""
-    if isinstance(value, float) and not math.isfinite(value):
-        return None
-    if isinstance(value, dict):
-        return {k: _sanitize_json(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_sanitize_json(v) for v in value]
-    return value
 
 
 def _as_bool_flag(value):
@@ -140,7 +129,7 @@ def save_batch(ctx: AppContext, payload: SystemSendRequest, user: dict) -> dict:
 
     # 복원한 조회 코드(_extract_records)가 rawPayload["records"] 형태를 기대하므로 맞춘다.
     # exclude_unset: 클라이언트가 실제로 보낸 필드만 저장 (본문 원형 보존)
-    raw = _sanitize_json({"records": [f.model_dump(exclude_unset=True) for f in frames]})
+    raw = sanitize_json({"records": [f.model_dump(exclude_unset=True) for f in frames]})
 
     now = int(time.time())
     params = (
