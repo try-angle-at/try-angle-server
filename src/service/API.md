@@ -835,8 +835,8 @@ Cloudflare R2 업로드를 담당합니다.
 | `eDate` | 세션 **시작일 <= 값** ⚠️ 종료일이 아니라 시작일 기준입니다 |
 | `category` | 텔레메트리 판정 카테고리 — 초 배치 요약과 정확히 일치 (예: `pose`, `pitch`) |
 | `feedback` | 가이드 피드백 문구 — **부분 일치** (각 초의 마지막 피드백 기준) |
-| `stuckSec` | 정체 시간 — **값 이상**인 초 배치가 있는 세션 (`0`은 필터 미적용) |
-| `canCapture` | `"true"` / `"false"` 문자열 — 해당 상태의 초 배치가 있는 세션 |
+| `stuckSec` | 정체 시간(float 허용) — **값 이상**인 초 배치가 있는 세션 (`0`은 필터 미적용) |
+| `canCapture` | `"true"`/`"false"` 또는 **boolean** — 해당 상태의 초 배치가 있는 세션. ⚠️ 값을 보고한 적 없는 세션은 어느 쪽에도 매칭되지 않음 |
 
 정렬 `sDate DESC` 고정.
 
@@ -847,9 +847,8 @@ Cloudflare R2 업로드를 담당합니다.
   "snapshotCount": 31, "maxStuckSec": 5.5, "mainFeedback": "거리 완벽" }
 ```
 
-> ⚠️ **소유권 필터가 자동 적용되지 않습니다.** `userId`를 지정하지 않으면
-> **전체 사용자의 세션이 반환됩니다.** 마이페이지 용도라면 클라이언트가
-> `filter.userId`를 반드시 명시해야 합니다.
+> **비-Admin은 자동으로 본인 세션만 반환됩니다** (`userId` 필터를 보내도 무시하고 본인으로 강제).
+> 전체 사용자 조회는 Admin 전용입니다 — admin 화면(SysList)은 기존대로 동작합니다.
 
 ---
 
@@ -879,13 +878,16 @@ Cloudflare R2 업로드를 담당합니다.
                  "metadata": { "stuckSec": 3.2, "canCapture": false } } }
     ],
     "secCount": 31,
-    "recordCount": 930
+    "recordCount": 930,
+    "truncated": false
   }
 }
 ```
 
 - `snapshots[]`는 `secSeq` 오름차순으로 각 초 배치의 프레임을 이어붙인 것 (admin 리플레이 화면이 소비하는 구조)
-- 프레임 필드는 전부 옵션 — 클라이언트가 보낸 것만 그대로 돌아옵니다
+- 프레임의 미지 필드(예: `conf`)도 보존되어 돌아옵니다. 단, 스키마 선언 필드(gate 등)는 클라이언트가 안 보냈어도 `null`로 채워져 내려갑니다
+- **한 번에 최대 1800개 초 배치**까지 반환 — 초과 시 `truncated: true`, `fromSecSeq`로 이어서 조회
+- 타입이 어긋나는 저장 레코드는 건너뛰고 서버 로그에 남깁니다 (응답 500 방지)
 
 **에러** — 403 `Session access denied`, 404 `Session not found`
 
@@ -1002,16 +1004,16 @@ Cloudflare R2 업로드를 담당합니다.
 
 | 필드 | 타입 | 필수 | 설명 |
 |---|---|:-:|---|
-| `sId` | string | ✅ | 세션 ID (`session/start` 응답 `data.id`) |
-| `secSeq` | int | ✅ | 세션 N번째 초 (1부터). **같은 secSeq 재전송 시 덮어씀 (멱등)** |
-| `payload` | array | ✅ | 그 초의 프레임 목록 (1~30개 가변, `offsetMs` 오름차순) |
+| `sId` | string | ✅ | **본인(또는 Admin) 세션만.** 타인 세션이면 403 |
+| `secSeq` | int | ✅ | 세션 N번째 초 (1부터, ≤ 2147483647). **같은 secSeq 재전송 시 덮어씀 (멱등)** |
+| `payload` | array | ✅ | 그 초의 프레임 목록 (**1~300개**, 계약상 1~30 + 여유. `offsetMs` 오름차순) |
 
 **`payload[]` 프레임** — 시퀀싱 3필드만 검증, 나머지는 무검증 통과 후 원형 저장:
 
 | 필드 | 타입 | 필수 | 설명 |
 |---|---|:-:|---|
 | `fseq` | int | ✅ | 세션 전역 프레임 번호 (초를 넘어 연속) |
-| `tid` | int | ✅ | 프레임 절대시각 unix **ms** — ⚠️ 정수만. 소수면 422 |
+| `tid` | int | ✅ | 프레임 절대시각 unix **ms** — ⚠️ 정수만(소수 422), 0 ≤ tid ≤ BIGINT |
 | `offsetMs` | int | ✅ | 그 초 안 경과 ms (매 초 첫 프레임에서 0 리셋) |
 | `gate` | int | — | 게이트 번호 (0~8). **상한 검증 없음** — 값 추가에 열려 있음 |
 | `phase` / `pidx` | str / int | — | 촬영 단계 / 단계 인덱스 |
@@ -1038,13 +1040,15 @@ Cloudflare R2 업로드를 담당합니다.
 
 | HTTP | detail |
 |---|---|
+| 403 | `Session access denied` — 본인 세션이 아님 (Admin 제외) |
 | 404 | `Session not found` — 존재하지 않는 `sId` |
-| 422 | 시퀀싱 필드 타입 오류 (`tid` 소수 등) |
+| 422 | 시퀀싱 필드 타입/범위 오류 (`tid` 소수, `secSeq` INT 초과, 빈/초대형 `payload` 등) |
 
 > 서버는 수신 즉시 DB(`tb_rt_snapshot`)에 저장합니다 (1배치 = 1행).
-> `res.category`/`res.feedback`(그 초의 마지막 값), `metadata.stuckSec`(최대),
-> `metadata.canCapture`(하나라도 true면 true)가 조회용 요약 컬럼으로 함께 적재되어
-> `session/list` 필터·집계의 기준이 됩니다.
+> `res.category`/`res.feedback`(그 초의 마지막 값, 각 64/500자로 잘라 저장 — 원문은 rawPayload에 보존),
+> `metadata.stuckSec`(최대), `metadata.canCapture`(하나라도 true면 `'true'` — `true`/`1`/`"true"`/`"1"` 인정)가
+> 조회용 요약 컬럼으로 함께 적재되어 `session/list` 필터·집계의 기준이 됩니다.
+> 본문 속 `NaN`/`Infinity`는 저장 시 `null`로 치환됩니다 (MySQL JSON이 거부하므로).
 
 #### `POST /api/system/flushSec` · `POST /api/system/flushSession` — 적재 확정
 
@@ -1054,6 +1058,8 @@ Cloudflare R2 업로드를 담당합니다.
 |---|---|---|
 | `/api/system/flushSec` | `{ "sId": "...", "secSeq": 25 }` | `{ "sId", "secSeq", "flushed": 0, "persisted": true }` |
 | `/api/system/flushSession` | `{ "sId": "..." }` | `{ "sId", "flushed": 0, "persistedSecs": 31 }` |
+
+둘 다 **본인(또는 Admin) 세션만** — 타인 세션이면 403.
 
 > 수신이 DB 직행이라 서버에 버퍼가 없습니다. `flushed`는 항상 `0`이고,
 > `persisted`/`persistedSecs`로 적재 여부를 확인하는 용도입니다.
@@ -1205,7 +1211,7 @@ Cloudflare R2 업로드를 담당합니다.
 | 3 | **`fileId`가 서버 재시작 시 소멸** (메모리 저장) | 업로드 즉시 `url` 사용·보관 |
 | 4 | **`session/start`가 HTTP 200 + `S0001`** | body code에 의존하지 말 것 |
 | 5 | **`session/detail` 응답이 `data.session`으로 한 겹 더 감싸짐** | 다른 상세 API와 파서 분리 |
-| 6 | **`session/list`에 소유권 필터 없음** | `filter.userId` 항상 명시 |
+| 6 | ~~`session/list` 소유권 필터 없음~~ → **비-Admin 자동 본인 스코핑으로 해결** (2026-08-31) | Admin만 전체 조회 |
 | 7 | **`snap/list`에 후기·체형 없음** | 상세는 `snap/get` 별도 호출 |
 | 8 | **`viewCnt`가 증가하지 않음** | 인기순 정렬 사용 보류 |
 | 9 | **`ctg/create`의 `userId`가 무시됨** | 필수지만 값은 의미 없음 |

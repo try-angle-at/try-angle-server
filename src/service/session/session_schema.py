@@ -1,7 +1,7 @@
 from enum import IntEnum
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class SessionStatus(IntEnum):
@@ -29,8 +29,16 @@ class SessionListFilter(BaseModel):
     # 실시간 스냅샷(tb_rt_snapshot) 기반 필터 — admin SysList가 전송
     category: Optional[str] = Field(None, description="판정 카테고리 필터 (예: pitch, pose)")
     feedback: Optional[str] = Field(None, description="가이드 피드백 문구 검색 (부분 일치)")
-    stuckSec: Optional[int] = Field(None, ge=0, description="최소 정체 시간(초) 조건")
-    canCapture: Optional[str] = Field(None, description="촬영 가능 여부 필터 ('true' 또는 'false')")
+    stuckSec: Optional[float] = Field(None, ge=0, description="최소 정체 시간(초) 조건")
+    canCapture: Optional[str] = Field(None, description="촬영 가능 여부 필터 ('true'/'false' 또는 boolean)")
+
+    @field_validator("canCapture", mode="before")
+    @classmethod
+    def _normalize_can_capture(cls, v):
+        # 수신측은 boolean canCapture를 받으므로 조회측도 boolean을 허용해 정규화한다
+        if isinstance(v, bool):
+            return "true" if v else "false"
+        return v
 
 
 class SessionListRequest(BaseModel):
@@ -46,8 +54,16 @@ class SessionListRequest(BaseModel):
     eDate: Optional[int] = Field(None, description="시작일(to) Unix Timestamp")
     category: Optional[str] = Field(None, description="판정 카테고리 필터")
     feedback: Optional[str] = Field(None, description="가이드 피드백 문구 검색")
-    stuckSec: Optional[int] = Field(None, ge=0, description="최소 정체 시간(초) 조건")
-    canCapture: Optional[str] = Field(None, description="촬영 가능 여부 필터")
+    stuckSec: Optional[float] = Field(None, ge=0, description="최소 정체 시간(초) 조건")
+    canCapture: Optional[str] = Field(None, description="촬영 가능 여부 필터 ('true'/'false' 또는 boolean)")
+
+    @field_validator("canCapture", mode="before")
+    @classmethod
+    def _normalize_can_capture(cls, v):
+        # 수신측은 boolean canCapture를 받으므로 조회측도 boolean을 허용해 정규화한다
+        if isinstance(v, bool):
+            return "true" if v else "false"
+        return v
 
 
 class SessionDetailRequest(BaseModel):
@@ -91,7 +107,10 @@ class SessionRecord(BaseModel):
 
     저장 데이터에 필드가 없을 수 있으므로 전부 Optional — 특히 gate는
     상한 제약은 물론 필수 강제도 하지 않는다 (le=5 사고 전례).
+    extra="allow": 수신이 원형 저장한 미지 키(conf 등)를 응답에서도 보존한다.
     """
+    model_config = ConfigDict(extra="allow", from_attributes=True)
+
     tid: Optional[int] = None
     fseq: Optional[int] = None
     offsetMs: Optional[int] = None
@@ -101,16 +120,14 @@ class SessionRecord(BaseModel):
     cur: Optional[dict[str, Any]] = None
     res: Optional[dict[str, Any]] = None
 
-    class Config:
-        from_attributes = True
-
 
 class SessionDetailResponse(BaseModel):
     session: SessionItem
     # secSeq 오름차순 → 각 배치의 records를 이어붙인 평탄화 프레임 배열
     snapshots: list[SessionRecord] = Field(default_factory=list)
-    secCount: int = Field(0, description="적재된 초 배치 수")
-    recordCount: int = Field(0, description="프레임 총수")
+    secCount: int = Field(0, description="반환된 초 배치 수")
+    recordCount: int = Field(0, description="반환된 프레임 총수")
+    truncated: bool = Field(False, description="서버 상한(1800초 배치)으로 잘렸으면 true — fromSecSeq로 페이징")
 
     class Config:
         from_attributes = True

@@ -20,7 +20,6 @@ from src.service.session.session_schema import (
     SessionStartRequest,
     SessionStatus,
 )
-from src.service.system import system_service
 from src.utils.db_utils import execute_query
 
 
@@ -30,7 +29,7 @@ router = APIRouter(prefix="/api/session", tags=["Session"])
 _AGG_COLS = """,
             (SELECT MAX(rt.stuckSec) FROM tb_rt_snapshot rt WHERE rt.sId = s.id) AS maxStuckSec,
             (SELECT COUNT(*) FROM tb_rt_snapshot rt WHERE rt.sId = s.id) AS snapshotCount,
-            (SELECT rt.feedback FROM tb_rt_snapshot rt WHERE rt.sId = s.id ORDER BY rt.secSeq DESC LIMIT 1) AS mainFeedback"""
+            (SELECT rt.feedback FROM tb_rt_snapshot rt WHERE rt.sId = s.id AND rt.feedback IS NOT NULL ORDER BY rt.secSeq DESC LIMIT 1) AS mainFeedback"""
 
 _Q = {
     "SR": f"""
@@ -75,10 +74,11 @@ _Q = {
         WHERE id = %s
     """,
     "SNAP": """
-        SELECT secSeq, sDate, eDate, rawPayload, cDate
+        SELECT secSeq, rawPayload
         FROM tb_rt_snapshot
         WHERE {where}
         ORDER BY secSeq ASC
+        LIMIT %s
     """,
 }
 
@@ -170,7 +170,7 @@ def _list_sessions_impl(
     eDate: int = None,
     category: str = None,
     feedback: str = None,
-    stuck_sec: int = None,
+    stuck_sec: float = None,
     can_capture: str = None,
 ) -> SessionListResponse:
     if not ctx.db_handler:
@@ -220,6 +220,11 @@ def _list_sessions_impl(
     return SessionListResponse(items=items, total=total, page=page, limit=limit)
 
 
+# detail 1회가 반환하는 초 배치 상한. 무제한이면 장시간/방치 세션에서 수십만 프레임을
+# 이벤트루프 위에서 직렬화하다 서버가 멎는다. 초과분은 truncated=true + fromSecSeq 페이징.
+_DETAIL_MAX_SECS = 1800
+
+
 def _get_session_detail_impl(
     ctx: AppContext,
     session_id: str,
@@ -244,34 +249,32 @@ def _get_session_detail_impl(
     rows = execute_query(
         ctx.db_handler,
         _Q["SNAP"].format(where=" AND ".join(where_parts)),
-        tuple(params),
+        tuple(params + [_DETAIL_MAX_SECS + 1]),
     )
+    truncated = len(rows) > _DETAIL_MAX_SECS
+    rows = rows[:_DETAIL_MAX_SECS]
 
-    # 초 배치들의 records를 하나의 평탄화 프레임 배열로 (admin SysDetail 소비 구조)
+    # 초 배치들의 records를 하나의 평탄화 프레임 배열로 (admin SysDetail 소비 구조).
+    # model_validate: 수신이 원형 저장한 extra 키를 그대로 보존한다.
+    # 타 경로로 적재된 비정합 레코드 하나가 detail 전체를 500으로 만들지 않도록
+    # 검증 실패 레코드는 건너뛴다 (원문은 rawPayload에 남아 있음).
     snapshots: list[SessionRecord] = []
-    record_count = 0
+    skipped = 0
     for row in rows:
-        records = _extract_records(row[3])
-        for rec in records:
-            snapshots.append(
-                SessionRecord(
-                    tid=rec.get("tid"),
-                    fseq=rec.get("fseq"),
-                    offsetMs=rec.get("offsetMs"),
-                    gate=rec.get("gate"),
-                    phase=rec.get("phase"),
-                    pidx=rec.get("pidx"),
-                    cur=rec.get("cur"),
-                    res=rec.get("res"),
-                )
-            )
-        record_count += len(records)
+        for rec in _extract_records(row[1]):
+            try:
+                snapshots.append(SessionRecord.model_validate(rec))
+            except Exception:
+                skipped += 1
+    if skipped and ctx.log:
+        ctx.log.warning(f"session/detail: skipped {skipped} malformed record(s) | sId={session_id}")
 
     return SessionDetailResponse(
         session=session,
         snapshots=snapshots,
         secCount=len(rows),
-        recordCount=record_count,
+        recordCount=len(snapshots),
+        truncated=truncated,
     )
 
 
@@ -343,10 +346,19 @@ def _end_session_impl(ctx: AppContext, payload: SessionEndRequest) -> dict:
             ctx.log.error(f"Failed to end session: {e}")
         raise HTTPException(status_code=500, detail="Failed to end session")
 
-    # v6 계약: end 응답에 세션 flush 결과 포함 (DB 직행이라 적재 현황 요약)
-    ended = _get_session_row(ctx, payload.id)
-    flush = system_service.flush_session_summary(ctx, payload.id)
-    return {**ended.model_dump(), "snapshotFlush": flush}
+    # v6 계약: end 응답에 세션 flush 결과 포함 (DB 직행이라 적재 현황 요약).
+    # UPDATE는 이미 커밋됐으므로 이후 조회가 실패해도 500을 내면 안 된다 —
+    # 500이면 앱이 재시도하고, 재시도는 sStat 가드의 409에 막혀 end 응답을 영영 못 받는다.
+    try:
+        base = _get_session_row(ctx, payload.id).model_dump()
+    except Exception as e:
+        if ctx.log:
+            ctx.log.warning(f"session/end: post-commit fetch failed, degrading | sId={payload.id} | {e}")
+        base = current.model_dump()
+        base.update({"eDate": now, "sStat": SessionStatus.COMPLETED.value, "uDate": now})
+    # snapshotCount는 방금 조회한 집계에 이미 있다 — 별도 COUNT 쿼리 불필요
+    flush = {"sId": payload.id, "flushed": 0, "persistedSecs": base.get("snapshotCount") or 0}
+    return {**base, "snapshotFlush": flush}
 
 
 def _norm_filter(payload: SessionListRequest) -> tuple:
@@ -373,6 +385,10 @@ def _norm_filter(payload: SessionListRequest) -> tuple:
 def _invoke(ctx, op: str, payload, user: dict):
     if op == "L":
         user_id, img_id, s_stat, s_date, e_date, category, feedback, stuck_sec, can_capture = _norm_filter(payload)
+        # 비-admin은 항상 본인 세션만 — list가 타인 텔레메트리 집계(mainFeedback 등)를
+        # 노출하지 않도록 detail의 소유권 규칙과 대칭을 맞춘다
+        if not _is_admin_role(user.get("role")):
+            user_id = user.get("id")
         return _list_sessions_impl(
             ctx,
             page=payload.page,
@@ -402,10 +418,10 @@ def _invoke(ctx, op: str, payload, user: dict):
 
 
 @router.post("/list")
-async def list_sessions(request: Request, payload: SessionListRequest, _=Depends(require_user)):
-    """촬영 세션 목록 조회 (텔레메트리 집계·필터 포함)"""
+async def list_sessions(request: Request, payload: SessionListRequest, user=Depends(require_user)):
+    """촬영 세션 목록 조회 (텔레메트리 집계·필터 포함, 비-admin은 본인 세션만)"""
     ctx = request.app.state.ctx
-    result = _invoke(ctx, "L", payload, {})
+    result = _invoke(ctx, "L", payload, user)
     return build_success_response(result)
 
 

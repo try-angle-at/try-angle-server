@@ -155,7 +155,25 @@ class AppFactory:
     async def _initialize_handlers(ctx: AppContext) -> None:
         """핸들러 초기화"""    
         ctx.log.info("     - Initializing handlers...")
-        ctx._init_db() 
+        ctx._init_db()
+        AppFactory._verify_schema(ctx)
+
+    @staticmethod
+    def _verify_schema(ctx: AppContext) -> None:
+        """마이그레이션 미적용을 조용한 500 폭탄 대신 기동 로그에서 드러낸다.
+
+        _AGG_COLS가 세션 4개 엔드포인트를 tb_rt_snapshot에 의존시키므로,
+        테이블이 없으면 세션 기능 전체가 죽는다 — 헬스체크로는 탐지 불가.
+        (마이그레이션은 레포 정책상 수동 적용: src/sql/migrations/)
+        """
+        try:
+            from src.utils.db_utils import execute_query
+            execute_query(ctx.db_handler, "SELECT 1 FROM tb_rt_snapshot LIMIT 1")
+        except Exception as e:
+            ctx.log.critical(
+                "     !! tb_rt_snapshot 확인 실패 — src/sql/migrations/2026-08-31_rt_snapshot.sql "
+                f"미적용 시 세션 API(start/end/list/detail) 전체가 500이 됩니다: {e}"
+            ) 
 
     
     @staticmethod
