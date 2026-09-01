@@ -6,7 +6,15 @@ from pydantic import BaseModel, Field
 class RefListFilter(BaseModel):
     ctgId: Optional[int] = Field(None, description="카테고리 ID 필터")
     title: Optional[str] = Field(None, description="제목 문자열 검색")
-    kwd: Optional[list[Any]] = Field(None, description="키워드 검색 배열")
+    kwd: Optional[list[Any]] = Field(None, description="키워드 검색 배열 (하나라도 겹치면 매칭)")
+    kwdGroups: Optional[list[list[Any]]] = Field(
+        None,
+        description="키워드 그룹 배열 — 그룹 안은 OR(겹침), 그룹 사이는 AND. 예: [[도메인들],[촬영방식들]]",
+    )
+    kwdMissing: Optional[list[Any]] = Field(
+        None,
+        description="이 코드들이 하나도 없는 사진만 — 미분류 작업 큐 조회용 (예: SHOT_* 전체를 주면 촬영방식 미지정만)",
+    )
 
 
 class RefListRequest(BaseModel):
