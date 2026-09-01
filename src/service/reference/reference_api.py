@@ -26,6 +26,7 @@ async def list_refs(request: Request, payload: RefListRequest, _=Depends(require
         title=payload.filter.title if payload.filter else None,
         kwd=payload.filter.kwd if payload.filter else None,
         kwd_groups=payload.filter.kwdGroups if payload.filter else None,
+        kwd_missing=payload.filter.kwdMissing if payload.filter else None,
     )
     return build_success_response(result)
 

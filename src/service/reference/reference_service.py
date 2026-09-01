@@ -78,6 +78,7 @@ def list_refs(
     title: str | None = None,
     kwd: list | None = None,
     kwd_groups: list[list] | None = None,
+    kwd_missing: list | None = None,
 ) -> RefListResponse:
     if not ctx.db_handler:
         raise HTTPException(status_code=500, detail="Database not initialized")
@@ -99,6 +100,11 @@ def list_refs(
         if group:
             where_conditions.append("JSON_OVERLAPS(i.kwd, CAST(%s AS JSON))")
             where_params.append(json.dumps(group, ensure_ascii=False))
+    # 미분류 큐: 지정 코드가 하나도 없는(또는 kwd 자체가 없는) 사진만.
+    # kwd가 NULL이면 JSON_OVERLAPS가 NULL이 되어 NOT에서도 걸러지므로 IS NULL을 함께 허용한다.
+    if kwd_missing:
+        where_conditions.append("(i.kwd IS NULL OR NOT JSON_OVERLAPS(i.kwd, CAST(%s AS JSON)))")
+        where_params.append(json.dumps(kwd_missing, ensure_ascii=False))
 
     where_clause = f"WHERE {' AND '.join(where_conditions)}" if where_conditions else ""
     where_params_tuple = tuple(where_params)
