@@ -77,6 +77,7 @@ def list_refs(
     ctg_id: int | None = None,
     title: str | None = None,
     kwd: list | None = None,
+    kwd_groups: list[list] | None = None,
 ) -> RefListResponse:
     if not ctx.db_handler:
         raise HTTPException(status_code=500, detail="Database not initialized")
@@ -92,6 +93,12 @@ def list_refs(
     if kwd:
         where_conditions.append("JSON_OVERLAPS(i.kwd, CAST(%s AS JSON))")
         where_params.append(json.dumps(kwd, ensure_ascii=False))
+    # 축별 필터: 그룹 안은 OR(JSON_OVERLAPS), 그룹 사이는 AND —
+    # 예: [[DOMAIN_*...], [SHOT_*...]] → "도메인 중 하나" AND "촬영방식 중 하나"
+    for group in kwd_groups or []:
+        if group:
+            where_conditions.append("JSON_OVERLAPS(i.kwd, CAST(%s AS JSON))")
+            where_params.append(json.dumps(group, ensure_ascii=False))
 
     where_clause = f"WHERE {' AND '.join(where_conditions)}" if where_conditions else ""
     where_params_tuple = tuple(where_params)
